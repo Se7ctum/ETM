@@ -123,9 +123,10 @@ internal sealed class ThumbnailOverlay : Form
                 ? (string.IsNullOrWhiteSpace(eveWindow.CharacterName) ? eveWindow.Title : eveWindow.CharacterName)
                 : customLabel;
 
-            if (appearance.ShowHotkeyInLabel && !string.IsNullOrWhiteSpace(directHotkey))
+            string hotkeyLabel = GetHotkeyLabel();
+            if (appearance.ShowHotkeyInLabel && !string.IsNullOrWhiteSpace(hotkeyLabel))
             {
-                label = $"{label} ({FormatHotkeyForLabel(directHotkey)})";
+                label = $"{label} ({hotkeyLabel})";
             }
 
             return label;
@@ -208,13 +209,19 @@ internal sealed class ThumbnailOverlay : Form
         if (state is not null)
         {
             customLabel = (state.CustomLabel ?? string.Empty).Trim();
-            directHotkey = (state.DirectHotkey ?? string.Empty).Trim();
             aspectRatioLocked = state.AspectRatioLocked;
             opacity = (byte)Math.Round(Math.Clamp(state.Opacity, 0f, 1f) * byte.MaxValue);
             UpdateThumbnail();
         }
 
         Invalidate();
+    }
+
+    internal void SetLabelHotkey(string hotkey)
+    {
+        directHotkey = hotkey.Trim();
+        Invalidate();
+        UpdateThumbnail();
     }
 
     internal void UpdateEveWindow(EveWindow updatedWindow)
@@ -476,10 +483,20 @@ internal sealed class ThumbnailOverlay : Form
             ? ClientSize.Width - textSize.Width - margin
             : margin;
         float y = position.Contains("Bottom", StringComparison.OrdinalIgnoreCase)
-            ? ClientSize.Height - textSize.Height - margin
+            ? Math.Min(ClientSize.Height - textSize.Height - margin, LabelBandHeight - textSize.Height - 4)
             : margin - 2;
 
         return new PointF(Math.Max(margin, x), Math.Max(4f, y));
+    }
+
+    private string GetHotkeyLabel()
+    {
+        if (!string.IsNullOrWhiteSpace(directHotkey))
+        {
+            return FormatHotkeyForLabel(directHotkey);
+        }
+
+        return string.Empty;
     }
 
     private void SendBehindOtherThumbnails()

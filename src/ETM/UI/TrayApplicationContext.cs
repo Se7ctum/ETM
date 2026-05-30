@@ -188,6 +188,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     existingOverlay.UpdateEveWindow(eveWindow);
                     OverlayState? state = FindOverlayState(eveWindow.CharacterName);
                     existingOverlay.ApplySettings(state, activeProfile.Appearance);
+                    existingOverlay.SetLabelHotkey(GetLabelHotkey(eveWindow.CharacterName, state));
                     existingOverlay.Visible = overlaysVisible && (state?.Visible ?? true);
                     continue;
                 }
@@ -290,6 +291,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 AspectRatioLocked = state?.AspectRatioLocked ?? true
             };
             overlay.ThumbnailsLocked = thumbnailsLocked;
+            overlay.SetLabelHotkey(GetLabelHotkey(eveWindow.CharacterName, state));
             overlay.OverlayStateChanged += OverlayStateChanged;
             overlay.SourceFocusRequested += OverlaySourceFocusRequested;
             overlay.ResizeAllRequested += OverlayResizeAllRequested;
@@ -563,8 +565,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             OverlayState? state = FindOverlayState(overlay.CharacterName);
             overlay.ApplySettings(state, activeProfile.Appearance);
+            overlay.SetLabelHotkey(GetLabelHotkey(overlay.CharacterName, state));
             overlay.Visible = overlaysVisible && (state?.Visible ?? true);
         }
+    }
+
+    private string GetLabelHotkey(string characterName, OverlayState? state)
+    {
+        if (!string.IsNullOrWhiteSpace(state?.DirectHotkey))
+        {
+            return state.DirectHotkey;
+        }
+
+        HotkeyGroup? group = activeProfile.HotkeyGroups.FirstOrDefault(group =>
+            !string.IsNullOrWhiteSpace(group.CycleHotkey)
+            && group.CharacterNames.Any(candidate =>
+                string.Equals(candidate, characterName, StringComparison.OrdinalIgnoreCase)));
+
+        return group?.CycleHotkey ?? string.Empty;
     }
 
     private void ApplyThumbnailLockState()
