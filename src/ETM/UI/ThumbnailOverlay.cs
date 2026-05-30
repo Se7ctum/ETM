@@ -778,24 +778,17 @@ internal sealed class ThumbnailOverlay : Form
 
         Rectangle thumbnailBounds = GetThumbnailArea();
         thumbnail.Update(thumbnailBounds, opacity);
+        Invalidate();
     }
 
     private Rectangle GetThumbnailArea()
     {
         int borderWidth = Math.Max(0, appearance.BorderWidth);
-        bool hasLabel = !string.IsNullOrWhiteSpace(DisplayLabel);
-        bool reserveLabelArea = hasLabel && appearance.LabelBackgroundEnabled;
-        bool bottomLabel = reserveLabelArea && appearance.LabelPosition.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
-        bool topLabel = reserveLabelArea && !bottomLabel;
-
-        int top = borderWidth + (topLabel ? LabelBandHeight : 0);
-        int bottomInset = borderWidth + (bottomLabel ? LabelBandHeight : 0);
-
         return new Rectangle(
             borderWidth,
-            top,
+            borderWidth,
             Math.Max(1, ClientSize.Width - borderWidth * 2),
-            Math.Max(1, ClientSize.Height - top - bottomInset));
+            Math.Max(1, ClientSize.Height - borderWidth * 2));
     }
 
     private static string FormatHotkeyForLabel(string hotkey)
