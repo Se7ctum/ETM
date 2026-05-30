@@ -211,9 +211,9 @@ internal sealed class ThumbnailOverlay : Form
             customLabel = (state.CustomLabel ?? string.Empty).Trim();
             aspectRatioLocked = state.AspectRatioLocked;
             opacity = (byte)Math.Round(Math.Clamp(state.Opacity, 0f, 1f) * byte.MaxValue);
-            UpdateThumbnail();
         }
 
+        UpdateThumbnail();
         Invalidate();
     }
 
@@ -784,8 +784,9 @@ internal sealed class ThumbnailOverlay : Form
     {
         int borderWidth = Math.Max(0, appearance.BorderWidth);
         bool hasLabel = !string.IsNullOrWhiteSpace(DisplayLabel);
-        bool bottomLabel = hasLabel && appearance.LabelPosition.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
-        bool topLabel = hasLabel && !bottomLabel;
+        bool reserveLabelArea = hasLabel && appearance.LabelBackgroundEnabled;
+        bool bottomLabel = reserveLabelArea && appearance.LabelPosition.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
+        bool topLabel = reserveLabelArea && !bottomLabel;
 
         int top = borderWidth + (topLabel ? LabelBandHeight : 0);
         int bottomInset = borderWidth + (bottomLabel ? LabelBandHeight : 0);
