@@ -289,12 +289,12 @@ internal sealed class ThumbnailOverlay : Form
             float fontSize = Math.Clamp(appearance.LabelFontSize, 6, 32);
             using Font font = new(fontName, fontSize, FontStyle.Regular, GraphicsUnit.Point);
             SizeF textSize = e.Graphics.MeasureString(label, font);
-            PointF labelPoint = GetLabelPoint(textSize);
-            RectangleF background = new(labelPoint.X - 4, labelPoint.Y - 2, textSize.Width + 8, textSize.Height + 4);
+            Rectangle labelArea = GetLabelArea();
+            PointF labelPoint = GetLabelPoint(textSize, labelArea);
             if (appearance.LabelBackgroundEnabled)
             {
                 using Brush backgroundBrush = new SolidBrush(Color.FromArgb(160, Color.Black));
-                e.Graphics.FillRectangle(backgroundBrush, background);
+                e.Graphics.FillRectangle(backgroundBrush, labelArea);
             }
 
             using Brush labelBrush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
@@ -474,19 +474,34 @@ internal sealed class ThumbnailOverlay : Form
         }
     }
 
-    private PointF GetLabelPoint(SizeF textSize)
+    private Rectangle GetLabelArea()
     {
-        const float margin = 8f;
+        string position = appearance.LabelPosition.Trim();
+        bool bottom = position.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
+        int borderWidth = Math.Max(0, appearance.BorderWidth);
+
+        int y = bottom
+            ? Math.Max(borderWidth, ClientSize.Height - borderWidth - LabelBandHeight)
+            : borderWidth;
+
+        return new Rectangle(
+            borderWidth,
+            y,
+            Math.Max(1, ClientSize.Width - borderWidth * 2),
+            LabelBandHeight);
+    }
+
+    private PointF GetLabelPoint(SizeF textSize, Rectangle labelArea)
+    {
+        const float horizontalPadding = 8f;
         string position = appearance.LabelPosition.Trim();
 
         float x = position.Contains("Right", StringComparison.OrdinalIgnoreCase)
-            ? ClientSize.Width - textSize.Width - margin
-            : margin;
-        float y = position.Contains("Bottom", StringComparison.OrdinalIgnoreCase)
-            ? Math.Min(ClientSize.Height - textSize.Height - margin, LabelBandHeight - textSize.Height - 4)
-            : margin - 2;
+            ? labelArea.Right - textSize.Width - horizontalPadding
+            : labelArea.Left + horizontalPadding;
+        float y = labelArea.Top + Math.Max(0, (labelArea.Height - textSize.Height) / 2f);
 
-        return new PointF(Math.Max(margin, x), Math.Max(4f, y));
+        return new PointF(Math.Max(labelArea.Left, x), Math.Max(labelArea.Top, y));
     }
 
     private string GetHotkeyLabel()
@@ -761,14 +776,25 @@ internal sealed class ThumbnailOverlay : Form
             return;
         }
 
-        int borderWidth = Math.Max(0, appearance.BorderWidth);
-        int labelBandHeight = string.IsNullOrWhiteSpace(DisplayLabel) ? 0 : LabelBandHeight;
-        Rectangle thumbnailBounds = new(
-            borderWidth,
-            labelBandHeight,
-            Math.Max(1, ClientSize.Width - borderWidth * 2),
-            Math.Max(1, ClientSize.Height - labelBandHeight - borderWidth));
+        Rectangle thumbnailBounds = GetThumbnailArea();
         thumbnail.Update(thumbnailBounds, opacity);
+    }
+
+    private Rectangle GetThumbnailArea()
+    {
+        int borderWidth = Math.Max(0, appearance.BorderWidth);
+        bool hasLabel = !string.IsNullOrWhiteSpace(DisplayLabel);
+        bool bottomLabel = hasLabel && appearance.LabelPosition.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
+        bool topLabel = hasLabel && !bottomLabel;
+
+        int top = borderWidth + (topLabel ? LabelBandHeight : 0);
+        int bottomInset = borderWidth + (bottomLabel ? LabelBandHeight : 0);
+
+        return new Rectangle(
+            borderWidth,
+            top,
+            Math.Max(1, ClientSize.Width - borderWidth * 2),
+            Math.Max(1, ClientSize.Height - top - bottomInset));
     }
 
     private static string FormatHotkeyForLabel(string hotkey)
