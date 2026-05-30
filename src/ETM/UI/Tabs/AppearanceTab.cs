@@ -43,7 +43,6 @@ internal sealed class AppearanceTab : UserControl
         AddColor(root, "Active border color", appearance.ActiveBorderColor, value => appearance.ActiveBorderColor = value, saveRequested);
         AddNumber(root, "Border width", appearance.BorderWidth, 0, 16, value => appearance.BorderWidth = value, saveRequested);
         AddColor(root, "Label color", appearance.LabelColor, value => appearance.LabelColor = value, saveRequested);
-        AddCheck(root, "Label background", appearance.LabelBackgroundEnabled, value => appearance.LabelBackgroundEnabled = value, saveRequested);
         AddCheck(root, "Show hotkey in label", appearance.ShowHotkeyInLabel, value => appearance.ShowHotkeyInLabel = value, saveRequested);
         AddCombo(root, "Label font", appearance.LabelFont, PopularFonts, value => appearance.LabelFont = value, saveRequested);
         AddNumber(root, "Label font size", appearance.LabelFontSize, 6, 32, value => appearance.LabelFontSize = value, saveRequested);

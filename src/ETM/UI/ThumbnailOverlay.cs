@@ -290,13 +290,6 @@ internal sealed class ThumbnailOverlay : Form
             using Font font = new(fontName, fontSize, FontStyle.Regular, GraphicsUnit.Point);
             SizeF textSize = e.Graphics.MeasureString(label, font);
             PointF labelPoint = GetLabelPoint(textSize);
-            if (appearance.LabelBackgroundEnabled)
-            {
-                RectangleF background = new(labelPoint.X - 4, labelPoint.Y - 2, textSize.Width + 8, textSize.Height + 4);
-                using Brush backgroundBrush = new SolidBrush(Color.FromArgb(160, Color.Black));
-                e.Graphics.FillRectangle(backgroundBrush, background);
-            }
-
             using Brush labelBrush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
             e.Graphics.DrawString(label, font, labelBrush, labelPoint);
         }
@@ -771,11 +764,17 @@ internal sealed class ThumbnailOverlay : Form
     private Rectangle GetThumbnailArea()
     {
         int borderWidth = Math.Max(0, appearance.BorderWidth);
+        bool hasLabel = !string.IsNullOrWhiteSpace(DisplayLabel);
+        bool bottomLabel = hasLabel && appearance.LabelPosition.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
+        bool topLabel = hasLabel && !bottomLabel;
+        int top = borderWidth + (topLabel ? LabelBandHeight : 0);
+        int bottomInset = borderWidth + (bottomLabel ? LabelBandHeight : 0);
+
         return new Rectangle(
             borderWidth,
-            borderWidth,
+            top,
             Math.Max(1, ClientSize.Width - borderWidth * 2),
-            Math.Max(1, ClientSize.Height - borderWidth * 2));
+            Math.Max(1, ClientSize.Height - top - bottomInset));
     }
 
     private static string FormatHotkeyForLabel(string hotkey)
