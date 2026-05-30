@@ -12,6 +12,7 @@ internal static partial class NativeMethods
     internal const int WS_EX_LAYERED = 0x00080000;
     internal const int WS_EX_NOACTIVATE = 0x08000000;
     internal const int WS_EX_TOOLWINDOW = 0x00000080;
+    internal const int WS_EX_TRANSPARENT = 0x00000020;
 
     internal const int LWA_ALPHA = 0x00000002;
     internal const int SWP_NOSIZE = 0x0001;
