@@ -1,0 +1,34 @@
+# Build outputs
+bin/
+obj/
+.vs/
+
+# Publish artifacts
+publish/
+publish_next/
+publish_single_test/
+
+# Local tooling and deploy keys
+tools/
+.github-deploy/
+*.pfx
+*.snk
+*.key
+
+# Visual Studio / user files
+*.user
+*.suo
+*.rsuser
+*.userosscache
+*.sln.docstates
+
+# Runtime/local settings
+settings.json
+
+# Local planning / handoff notes
+HANDOFF.md
+PLAN.md
+
+# Logs/temp
+*.log
+*.tmp

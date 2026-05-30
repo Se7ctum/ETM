@@ -1,0 +1,755 @@
+﻿using ETM.Core;
+using ETM.Persistence;
+
+namespace ETM.UI;
+
+internal sealed class TrayApplicationContext : ApplicationContext
+{
+    private const int DefaultOverlayWidth = 320;
+    private const int DefaultOverlayHeight = 180;
+    private const int MinimumOverlayWidth = 100;
+    private const int MinimumOverlayHeight = 57;
+    private const int MaximumOverlayWidth = 480;
+    private const int MaximumOverlayHeight = 270;
+
+    private readonly NotifyIcon trayIcon;
+    private readonly System.Windows.Forms.Timer refreshTimer;
+    private readonly System.Windows.Forms.Timer saveDebounceTimer;
+    private readonly ForegroundWatcher foregroundWatcher;
+    private readonly HotkeyMessageWindow hotkeyWindow;
+    private readonly HotkeyManager hotkeyManager;
+    private readonly Dictionary<IntPtr, ThumbnailOverlay> overlays = new();
+    private readonly AppSettings settings;
+    private Profile activeProfile;
+    private ConfigWindow? configWindow;
+    private ToolStripMenuItem lockThumbnailsMenuItem = null!;
+    private ToolStripMenuItem showHideAllMenuItem = null!;
+    private bool thumbnailsLocked;
+    private bool overlaysVisible = true;
+    private bool isShuttingDown;
+    private bool isSwitchingProfile;
+
+    internal TrayApplicationContext()
+    {
+        settings = SettingsManager.Load();
+        activeProfile = GetActiveProfile();
+        thumbnailsLocked = activeProfile.ThumbnailsLocked;
+
+        trayIcon = new NotifyIcon
+        {
+            Icon = LoadTrayIcon(),
+            Text = "EVE Thumbnail Manager",
+            Visible = true,
+            ContextMenuStrip = BuildContextMenu()
+        };
+
+        trayIcon.DoubleClick += (_, _) => OpenConfiguration();
+
+        foregroundWatcher = new ForegroundWatcher();
+        foregroundWatcher.ForegroundChanged += (_, hwnd) => UpdateActiveOverlay(hwnd);
+
+        hotkeyWindow = new HotkeyMessageWindow();
+        hotkeyManager = new HotkeyManager(hotkeyWindow.Handle);
+        hotkeyWindow.HotkeyPressed += (_, message) => hotkeyManager.ProcessHotkeyMessage(message);
+        RegisterHotkeys();
+
+        saveDebounceTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 5000
+        };
+        saveDebounceTimer.Tick += (_, _) =>
+        {
+            saveDebounceTimer.Stop();
+            SavePositions();
+        };
+
+        refreshTimer = new System.Windows.Forms.Timer
+        {
+            Interval = 3000
+        };
+        refreshTimer.Tick += (_, _) => RefreshThumbnails();
+        refreshTimer.Start();
+
+        RefreshThumbnails();
+    }
+
+    private ContextMenuStrip BuildContextMenu()
+    {
+        ContextMenuStrip menu = new();
+
+        menu.Items.Add("Configure...", null, (_, _) => OpenConfiguration());
+        menu.Items.Add("Reload thumbnails", null, (_, _) => ReloadThumbnails());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Save positions", null, (_, _) => SavePositions());
+        menu.Items.Add("Restore positions", null, (_, _) => ReloadThumbnails());
+        menu.Items.Add(new ToolStripSeparator());
+
+        lockThumbnailsMenuItem = new ToolStripMenuItem("Lock thumbnails")
+        {
+            CheckOnClick = true,
+            Checked = thumbnailsLocked
+        };
+        lockThumbnailsMenuItem.CheckedChanged += (_, _) =>
+        {
+            thumbnailsLocked = lockThumbnailsMenuItem.Checked;
+            activeProfile.ThumbnailsLocked = thumbnailsLocked;
+            ApplyThumbnailLockState();
+            ScheduleSave();
+        };
+        menu.Items.Add(lockThumbnailsMenuItem);
+
+        showHideAllMenuItem = new ToolStripMenuItem("Hide All");
+        showHideAllMenuItem.Click += (_, _) => ToggleAllOverlays();
+        menu.Items.Add(showHideAllMenuItem);
+
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => ExitApplication());
+
+        return menu;
+    }
+
+    private static Icon LoadTrayIcon()
+    {
+        using Stream? embeddedIcon = typeof(TrayApplicationContext).Assembly.GetManifestResourceStream("ETM.Resources.tray_icon.ico");
+        if (embeddedIcon is not null)
+        {
+            try
+            {
+                using Icon icon = new(embeddedIcon);
+                return (Icon)icon.Clone();
+            }
+            catch (Exception)
+            {
+                // Fall through to the file-system icon if the embedded icon is invalid.
+            }
+        }
+
+        string iconPath = Path.Combine(AppContext.BaseDirectory, "Resources", "tray_icon.ico");
+        if (File.Exists(iconPath))
+        {
+            try
+            {
+                return new Icon(iconPath);
+            }
+            catch (Exception)
+            {
+                // Fall through to the system icon if the packaged icon is invalid.
+            }
+        }
+
+        return SystemIcons.Application;
+    }
+
+    private Profile GetActiveProfile()
+    {
+        Profile? profile = settings.Profiles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, settings.ActiveProfileName, StringComparison.OrdinalIgnoreCase));
+        if (profile is not null)
+        {
+            return profile;
+        }
+
+        profile = settings.Profiles.FirstOrDefault();
+        if (profile is not null)
+        {
+            settings.ActiveProfileName = profile.Name;
+            return profile;
+        }
+
+        profile = new Profile { Name = "Default" };
+        settings.ActiveProfileName = profile.Name;
+        settings.Profiles.Add(profile);
+        return profile;
+    }
+
+    private void RefreshThumbnails()
+    {
+        try
+        {
+            List<EveWindow> detectedWindows = WindowEnumerator.FindEveWindows();
+            if (TryAutoLoadProfile(detectedWindows))
+            {
+                return;
+            }
+
+            HashSet<IntPtr> detectedHandles = detectedWindows.Select(window => window.Handle).ToHashSet();
+
+            foreach (IntPtr handle in overlays.Keys.Where(handle => !detectedHandles.Contains(handle)).ToList())
+            {
+                overlays[handle].OverlayStateChanged -= OverlayStateChanged;
+                overlays[handle].Dispose();
+                overlays.Remove(handle);
+            }
+
+            foreach (EveWindow eveWindow in detectedWindows)
+            {
+                if (overlays.TryGetValue(eveWindow.Handle, out ThumbnailOverlay? existingOverlay))
+                {
+                    existingOverlay.UpdateEveWindow(eveWindow);
+                    OverlayState? state = FindOverlayState(eveWindow.CharacterName);
+                    existingOverlay.ApplySettings(state, activeProfile.Appearance);
+                    existingOverlay.Visible = overlaysVisible && (state?.Visible ?? true);
+                    continue;
+                }
+
+                CreateOverlay(eveWindow);
+            }
+
+            UpdateActiveOverlay(NativeMethods.GetForegroundWindow());
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"ETM: Thumbnail refresh failed: {ex}");
+        }
+    }
+
+    private void UpdateActiveOverlay(IntPtr foregroundHwnd)
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            overlay.IsActiveClient = overlay.SourceHandle == foregroundHwnd;
+        }
+    }
+
+    private void SetActiveOverlayImmediately(ThumbnailOverlay activeOverlay)
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            overlay.SetActiveImmediate(ReferenceEquals(overlay, activeOverlay));
+        }
+    }
+
+    private void ReloadThumbnails()
+    {
+        DisposeOverlays();
+        RefreshThumbnails();
+    }
+
+    private bool TryAutoLoadProfile(IReadOnlyCollection<EveWindow> detectedWindows)
+    {
+        if (isSwitchingProfile || settings.Profiles.Count < 2)
+        {
+            return false;
+        }
+
+        Profile? matchingProfile = FindCharacterAutoLoadProfile(detectedWindows)
+            ?? FindCountAutoLoadProfile(detectedWindows.Count);
+        if (matchingProfile is null || ReferenceEquals(matchingProfile, activeProfile))
+        {
+            return false;
+        }
+
+        SwitchActiveProfile(matchingProfile.Name);
+        return true;
+    }
+
+    private Profile? FindCharacterAutoLoadProfile(IEnumerable<EveWindow> detectedWindows)
+    {
+        HashSet<string> detectedCharacters = detectedWindows
+            .Select(window => window.CharacterName)
+            .Where(characterName => !string.IsNullOrWhiteSpace(characterName))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (detectedCharacters.Count == 0)
+        {
+            return null;
+        }
+
+        return settings.Profiles.FirstOrDefault(profile =>
+            profile.AutoLoadCharacters.Count > 0
+            && profile.AutoLoadCharacters.All(characterName =>
+                !string.IsNullOrWhiteSpace(characterName)
+                && detectedCharacters.Contains(characterName)));
+    }
+
+    private Profile? FindCountAutoLoadProfile(int clientCount)
+    {
+        return settings.Profiles.FirstOrDefault(profile =>
+            profile.AutoLoadClientCount.HasValue
+            && profile.AutoLoadClientCount.Value == clientCount);
+    }
+
+    private void CreateOverlay(EveWindow eveWindow)
+    {
+        ThumbnailOverlay? overlay = null;
+        try
+        {
+            OverlayState? state = FindOverlayState(eveWindow.CharacterName);
+            Rectangle bounds = state is null ? new Rectangle(100, 100, DefaultOverlayWidth, DefaultOverlayHeight) : RestoreBounds(state);
+            byte opacity = ToOpacityByte(state?.Opacity ?? activeProfile.Appearance.DefaultOpacity);
+
+            overlay = new ThumbnailOverlay(
+                eveWindow,
+                settings.Global,
+                activeProfile.Appearance,
+                GetOtherOverlayBounds,
+                bounds,
+                opacity,
+                state?.CustomLabel ?? string.Empty)
+            {
+                Visible = overlaysVisible && (state?.Visible ?? true),
+                AspectRatioLocked = state?.AspectRatioLocked ?? true
+            };
+            overlay.ThumbnailsLocked = thumbnailsLocked;
+            overlay.OverlayStateChanged += OverlayStateChanged;
+            overlay.SourceFocusRequested += OverlaySourceFocusRequested;
+            overlay.ResizeAllRequested += OverlayResizeAllRequested;
+            overlays.Add(eveWindow.Handle, overlay);
+
+            if (overlay.Visible)
+            {
+                overlay.Show();
+                overlay.EnsureAlwaysOnTop();
+            }
+        }
+        catch (Exception ex)
+        {
+            if (overlay is not null)
+            {
+                overlay.OverlayStateChanged -= OverlayStateChanged;
+                overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
+                overlay.ResizeAllRequested -= OverlayResizeAllRequested;
+                overlay.Dispose();
+            }
+
+            overlays.Remove(eveWindow.Handle);
+            System.Diagnostics.Debug.WriteLine($"ETM: Failed to create thumbnail overlay: {ex}");
+        }
+    }
+
+    private OverlayState? FindOverlayState(string characterName)
+    {
+        if (string.IsNullOrWhiteSpace(characterName))
+        {
+            return null;
+        }
+
+        return activeProfile.Overlays.FirstOrDefault(state =>
+            string.Equals(state.CharacterName, characterName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private IReadOnlyCollection<Rectangle> GetOtherOverlayBounds(ThumbnailOverlay overlay)
+    {
+        return overlays.Values
+            .Where(candidate => !ReferenceEquals(candidate, overlay) && !candidate.IsDisposed)
+            .Select(candidate => candidate.Bounds)
+            .ToList();
+    }
+
+    private static byte ToOpacityByte(float opacity)
+    {
+        float clamped = Math.Clamp(opacity, 0f, 1f);
+        return (byte)Math.Round(clamped * byte.MaxValue);
+    }
+
+    private static float FromOpacityByte(byte opacity)
+    {
+        return opacity / (float)byte.MaxValue;
+    }
+
+    private void OverlayStateChanged(object? sender, EventArgs e)
+    {
+        if (sender is ThumbnailOverlay overlay)
+        {
+            UpdateOverlayState(overlay);
+            ScheduleSave();
+        }
+    }
+
+    private void OverlaySourceFocusRequested(object? sender, EventArgs e)
+    {
+        if (sender is ThumbnailOverlay overlay)
+        {
+            SetActiveOverlayImmediately(overlay);
+        }
+    }
+
+    private void OverlayResizeAllRequested(object? sender, ThumbnailOverlay.ThumbnailResizeEventArgs e)
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            if (ReferenceEquals(overlay, sender) || overlay.IsDisposed)
+            {
+                continue;
+            }
+
+            overlay.SetThumbnailSize(e.Size);
+            UpdateOverlayState(overlay);
+        }
+
+        ScheduleSave();
+    }
+
+    private void ScheduleSave()
+    {
+        if (isShuttingDown)
+        {
+            return;
+        }
+
+        saveDebounceTimer.Stop();
+        saveDebounceTimer.Start();
+    }
+
+    private void SavePositions()
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            UpdateOverlayState(overlay);
+        }
+
+        SettingsManager.Save(settings);
+    }
+
+    private void UpdateOverlayState(ThumbnailOverlay overlay)
+    {
+        if (string.IsNullOrWhiteSpace(overlay.CharacterName))
+        {
+            return;
+        }
+
+        OverlayState? state = FindOverlayState(overlay.CharacterName);
+        if (state is null)
+        {
+            state = new OverlayState { CharacterName = overlay.CharacterName };
+            activeProfile.Overlays.Add(state);
+        }
+
+        SaveBounds(overlay.Bounds, state);
+        state.CustomLabel = overlay.CustomLabel;
+        state.Visible = overlay.Visible;
+        state.Opacity = FromOpacityByte(overlay.ThumbnailOpacity);
+        state.AspectRatioLocked = overlay.AspectRatioLocked;
+    }
+
+    private static IReadOnlyList<Screen> GetOrderedScreens()
+    {
+        return Screen.AllScreens.OrderBy(screen => screen.Bounds.Left).ToList();
+    }
+
+    private static void SaveBounds(Rectangle bounds, OverlayState state)
+    {
+        IReadOnlyList<Screen> screens = GetOrderedScreens();
+        Point center = new(bounds.Left + bounds.Width / 2, bounds.Top + bounds.Height / 2);
+        int monitorIndex = 0;
+        for (int i = 0; i < screens.Count; i++)
+        {
+            if (screens[i].Bounds.Contains(center))
+            {
+                monitorIndex = i;
+                break;
+            }
+        }
+
+        Rectangle monitorBounds = screens.Count == 0 ? Screen.PrimaryScreen?.Bounds ?? Rectangle.Empty : screens[monitorIndex].Bounds;
+        state.MonitorIndex = monitorIndex;
+        state.X = bounds.Left - monitorBounds.Left;
+        state.Y = bounds.Top - monitorBounds.Top;
+        state.Width = bounds.Width;
+        state.Height = bounds.Height;
+    }
+
+    private static Rectangle RestoreBounds(OverlayState state)
+    {
+        IReadOnlyList<Screen> screens = GetOrderedScreens();
+        Screen? primary = Screen.PrimaryScreen;
+        Rectangle monitorBounds = primary?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
+        if (state.MonitorIndex >= 0 && state.MonitorIndex < screens.Count)
+        {
+            monitorBounds = screens[state.MonitorIndex].Bounds;
+        }
+
+        int width = Math.Clamp(state.Width, MinimumOverlayWidth, Math.Min(MaximumOverlayWidth, monitorBounds.Width));
+        int height = Math.Clamp(state.Height, MinimumOverlayHeight, Math.Min(MaximumOverlayHeight, monitorBounds.Height));
+
+        if (state.Width > MaximumOverlayWidth || state.Height > MaximumOverlayHeight)
+        {
+            width = Math.Min(DefaultOverlayWidth, monitorBounds.Width);
+            height = Math.Min(DefaultOverlayHeight, monitorBounds.Height);
+        }
+
+        int x = Math.Clamp(monitorBounds.Left + state.X, monitorBounds.Left, monitorBounds.Right - width);
+        int y = Math.Clamp(monitorBounds.Top + state.Y, monitorBounds.Top, monitorBounds.Bottom - height);
+        return new Rectangle(x, y, width, height);
+    }
+
+    private void OpenConfiguration()
+    {
+        if (configWindow is null || configWindow.IsDisposed)
+        {
+            configWindow = new ConfigWindow(settings, activeProfile, ApplySettingsChanges, SwitchActiveProfile);
+        }
+
+        configWindow.Show();
+        configWindow.Activate();
+    }
+
+    private void SwitchActiveProfile(string profileName)
+    {
+        Profile? profile = settings.Profiles.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, profileName, StringComparison.OrdinalIgnoreCase));
+        if (profile is null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(activeProfile, profile))
+        {
+            settings.ActiveProfileName = activeProfile.Name;
+            return;
+        }
+
+        SavePositions();
+        try
+        {
+            isSwitchingProfile = true;
+            activeProfile = profile;
+            settings.ActiveProfileName = profile.Name;
+            thumbnailsLocked = activeProfile.ThumbnailsLocked;
+            lockThumbnailsMenuItem.Checked = thumbnailsLocked;
+            ApplyThumbnailLockState();
+            RegisterHotkeys();
+            ReloadThumbnails();
+            RecreateConfigWindowIfOpen();
+            SavePositions();
+        }
+        finally
+        {
+            isSwitchingProfile = false;
+        }
+    }
+
+    private void RecreateConfigWindowIfOpen()
+    {
+        if (configWindow is null || configWindow.IsDisposed)
+        {
+            return;
+        }
+
+        bool wasVisible = configWindow.Visible;
+        configWindow.Close();
+        configWindow.Dispose();
+        configWindow = null;
+
+        if (wasVisible)
+        {
+            OpenConfiguration();
+        }
+    }
+
+    private void ToggleAllOverlays()
+    {
+        overlaysVisible = !overlaysVisible;
+        showHideAllMenuItem.Text = overlaysVisible ? "Hide All" : "Show All";
+
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            overlay.Visible = overlaysVisible;
+            UpdateOverlayState(overlay);
+        }
+
+        ScheduleSave();
+    }
+
+    private void ApplySettingsChanges()
+    {
+        SettingsManager.Save(settings);
+        RegisterHotkeys();
+        ApplyOverlaySettings();
+    }
+
+    private void ApplyOverlaySettings()
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            OverlayState? state = FindOverlayState(overlay.CharacterName);
+            overlay.ApplySettings(state, activeProfile.Appearance);
+            overlay.Visible = overlaysVisible && (state?.Visible ?? true);
+        }
+    }
+
+    private void ApplyThumbnailLockState()
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            overlay.ThumbnailsLocked = thumbnailsLocked;
+        }
+    }
+
+    private void RegisterHotkeys()
+    {
+        hotkeyManager.UnregisterAll();
+        hotkeyManager.Register(
+            string.IsNullOrWhiteSpace(settings.Global.ShowHideAllHotkey) ? "F12" : settings.Global.ShowHideAllHotkey,
+            ToggleAllOverlays);
+
+        foreach (OverlayState state in activeProfile.Overlays)
+        {
+            if (string.IsNullOrWhiteSpace(state.CharacterName) || string.IsNullOrWhiteSpace(state.DirectHotkey))
+            {
+                continue;
+            }
+
+            string characterName = state.CharacterName;
+            hotkeyManager.Register(state.DirectHotkey, () => FocusOverlayForCharacter(characterName));
+        }
+
+        foreach (HotkeyGroup group in activeProfile.HotkeyGroups)
+        {
+            if (string.IsNullOrWhiteSpace(group.Name) || string.IsNullOrWhiteSpace(group.CycleHotkey) || group.CharacterNames.Count == 0)
+            {
+                continue;
+            }
+
+            string groupName = group.Name;
+            hotkeyManager.Register(group.CycleHotkey, () => CycleHotkeyGroup(groupName));
+        }
+    }
+
+    private void FocusOverlayForCharacter(string characterName)
+    {
+        ThumbnailOverlay? overlay = overlays.Values.FirstOrDefault(candidate =>
+            string.Equals(candidate.CharacterName, characterName, StringComparison.OrdinalIgnoreCase));
+        if (overlay is null)
+        {
+            return;
+        }
+
+        SetActiveOverlayImmediately(overlay);
+        overlay.FocusSourceWindow();
+    }
+
+    private void CycleHotkeyGroup(string groupName)
+    {
+        HotkeyGroup? group = activeProfile.HotkeyGroups.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, groupName, StringComparison.OrdinalIgnoreCase));
+        if (group is null || group.CharacterNames.Count == 0)
+        {
+            return;
+        }
+
+        List<string> characterNames = group.CharacterNames
+            .Where(characterName => !string.IsNullOrWhiteSpace(characterName))
+            .ToList();
+        if (characterNames.Count == 0)
+        {
+            return;
+        }
+
+        int startIndex = GetCycleStartIndex(characterNames);
+
+        for (int offset = 0; offset < characterNames.Count; offset++)
+        {
+            int index = (startIndex + offset) % characterNames.Count;
+            ThumbnailOverlay? overlay = overlays.Values.FirstOrDefault(candidate =>
+                string.Equals(candidate.CharacterName, characterNames[index], StringComparison.OrdinalIgnoreCase));
+            if (overlay is null)
+            {
+                continue;
+            }
+
+            SetActiveOverlayImmediately(overlay);
+            overlay.FocusSourceWindow();
+            return;
+        }
+    }
+
+    private int GetCycleStartIndex(IReadOnlyList<string> characterNames)
+    {
+        string? currentCharacter = GetCurrentFocusedCharacterName();
+        if (string.IsNullOrWhiteSpace(currentCharacter))
+        {
+            return 0;
+        }
+
+        int currentIndex = -1;
+        for (int i = 0; i < characterNames.Count; i++)
+        {
+            if (string.Equals(characterNames[i], currentCharacter, StringComparison.OrdinalIgnoreCase))
+            {
+                currentIndex = i;
+                break;
+            }
+        }
+
+        return currentIndex < 0 ? 0 : (currentIndex + 1) % characterNames.Count;
+    }
+
+    private string? GetCurrentFocusedCharacterName()
+    {
+        IntPtr foregroundHwnd = NativeMethods.GetForegroundWindow();
+        ThumbnailOverlay? foregroundOverlay = overlays.Values.FirstOrDefault(overlay =>
+            overlay.SourceHandle == foregroundHwnd);
+        if (foregroundOverlay is not null)
+        {
+            return foregroundOverlay.CharacterName;
+        }
+
+        return overlays.Values.FirstOrDefault(overlay => overlay.IsActiveClient)?.CharacterName;
+    }
+
+    private void ExitApplication()
+    {
+        isShuttingDown = true;
+        refreshTimer.Stop();
+        saveDebounceTimer.Stop();
+        SavePositions();
+        hotkeyManager.Dispose();
+        hotkeyWindow.DestroyHandle();
+        foregroundWatcher.Dispose();
+        DisposeOverlays();
+        trayIcon.Visible = false;
+        ExitThread();
+    }
+
+    private void DisposeOverlays()
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            overlay.OverlayStateChanged -= OverlayStateChanged;
+            overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
+            overlay.ResizeAllRequested -= OverlayResizeAllRequested;
+            overlay.Dispose();
+        }
+
+        overlays.Clear();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            isShuttingDown = true;
+            refreshTimer.Dispose();
+            saveDebounceTimer.Dispose();
+            SavePositions();
+            hotkeyManager.Dispose();
+            hotkeyWindow.DestroyHandle();
+            foregroundWatcher.Dispose();
+            DisposeOverlays();
+            trayIcon.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private sealed class HotkeyMessageWindow : NativeWindow
+    {
+        internal event EventHandler<Message>? HotkeyPressed;
+
+        internal HotkeyMessageWindow()
+        {
+            CreateHandle(new CreateParams());
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == NativeMethods.WM_HOTKEY)
+            {
+                HotkeyPressed?.Invoke(this, message);
+                return;
+            }
+
+            base.WndProc(ref message);
+        }
+    }
+}
