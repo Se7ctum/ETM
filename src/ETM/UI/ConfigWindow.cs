@@ -9,6 +9,8 @@ internal sealed class ConfigWindow : Form
     private readonly Profile activeProfile;
     private readonly Action saveRequested;
     private readonly Action<string> activeProfileChanged;
+    private readonly Panel contentHost = new();
+    private readonly List<Button> navigationButtons = new();
 
     internal ConfigWindow(AppSettings settings, Profile activeProfile, Action saveRequested, Action<string> activeProfileChanged)
     {
@@ -25,29 +27,113 @@ internal sealed class ConfigWindow : Form
         BackColor = UiTheme.Background;
         ForeColor = UiTheme.Text;
 
-        TabControl tabs = new()
+        TableLayoutPanel shell = new()
         {
             Dock = DockStyle.Fill,
-            Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point)
+            ColumnCount = 2,
+            Padding = new Padding(0)
         };
-        UiTheme.StyleTabControl(tabs);
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-        AddTab(tabs, "Profiles", new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged));
-        AddTab(tabs, "Thumbnails", new ThumbnailsTab(activeProfile, RequestSave));
-        AddTab(tabs, "Hotkeys", new HotkeysTab(settings, activeProfile, RequestSave));
-        AddTab(tabs, "Appearance", new AppearanceTab(activeProfile, RequestSave));
-        AddTab(tabs, "System", new SystemTab(settings, RequestSave));
+        Panel sidebar = BuildSidebar();
+        contentHost.Dock = DockStyle.Fill;
+        contentHost.BackColor = UiTheme.Background;
+        contentHost.Padding = new Padding(24);
 
-        Controls.Add(tabs);
+        shell.Controls.Add(sidebar, 0, 0);
+        shell.Controls.Add(contentHost, 1, 0);
+
+        Controls.Add(shell);
         UiTheme.Apply(this);
+        ShowPage(navigationButtons[0], new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged));
     }
 
-    private static void AddTab(TabControl tabs, string title, Control content)
+    private Panel BuildSidebar()
     {
-        TabPage page = new(title);
+        Panel sidebar = new()
+        {
+            Dock = DockStyle.Fill,
+            BackColor = UiTheme.Surface,
+            Padding = new Padding(14, 18, 14, 18)
+        };
+
+        Label title = new()
+        {
+            Text = "ETM",
+            Dock = DockStyle.Top,
+            Height = 38,
+            Font = new Font("Segoe UI", 18F, FontStyle.Bold, GraphicsUnit.Point),
+            ForeColor = UiTheme.Text
+        };
+        Label subtitle = new()
+        {
+            Text = "Configuration",
+            Dock = DockStyle.Top,
+            Height = 28,
+            ForeColor = UiTheme.MutedText
+        };
+
+        FlowLayoutPanel nav = new()
+        {
+            Dock = DockStyle.Top,
+            FlowDirection = FlowDirection.TopDown,
+            WrapContents = false,
+            AutoSize = true,
+            Padding = new Padding(0, 22, 0, 0)
+        };
+
+        nav.Controls.Add(CreateNavButton("Profiles", () => new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged)));
+        nav.Controls.Add(CreateNavButton("Thumbnails", () => new ThumbnailsTab(activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("Hotkeys", () => new HotkeysTab(settings, activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("Appearance", () => new AppearanceTab(activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("System", () => new SystemTab(settings, RequestSave)));
+
+        sidebar.Controls.Add(nav);
+        sidebar.Controls.Add(subtitle);
+        sidebar.Controls.Add(title);
+        return sidebar;
+    }
+
+    private Button CreateNavButton(string text, Func<Control> pageFactory)
+    {
+        Button button = new()
+        {
+            Text = text,
+            Width = 188,
+            Height = 44,
+            Margin = new Padding(0, 0, 0, 8),
+            TextAlign = ContentAlignment.MiddleLeft,
+            Padding = new Padding(14, 0, 0, 0),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = UiTheme.Surface,
+            ForeColor = UiTheme.Text
+        };
+        button.FlatAppearance.BorderSize = 0;
+        button.FlatAppearance.MouseOverBackColor = UiTheme.SurfaceRaised;
+        button.FlatAppearance.MouseDownBackColor = UiTheme.SurfaceRaised;
+        button.Click += (_, _) => ShowPage(button, pageFactory());
+        navigationButtons.Add(button);
+        return button;
+    }
+
+    private void ShowPage(Button selectedButton, Control content)
+    {
+        foreach (Button button in navigationButtons)
+        {
+            button.BackColor = ReferenceEquals(button, selectedButton) ? UiTheme.SurfaceRaised : UiTheme.Surface;
+            button.ForeColor = ReferenceEquals(button, selectedButton) ? Color.White : UiTheme.MutedText;
+        }
+
+        foreach (Control control in contentHost.Controls)
+        {
+            control.Dispose();
+        }
+
+        contentHost.Controls.Clear();
         content.Dock = DockStyle.Fill;
-        page.Controls.Add(content);
-        tabs.TabPages.Add(page);
+        contentHost.Controls.Add(content);
+        UiTheme.Apply(contentHost);
     }
 
     private void RequestSave()

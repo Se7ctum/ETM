@@ -62,12 +62,13 @@ internal static class UiTheme
             case TextBox textBox:
                 textBox.BackColor = Color.FromArgb(12, 15, 20);
                 textBox.ForeColor = Text;
-                textBox.BorderStyle = BorderStyle.FixedSingle;
+                textBox.BorderStyle = BorderStyle.None;
+                textBox.Margin = new Padding(0, 4, 0, 4);
                 break;
             case ListBox listBox:
                 listBox.BackColor = Color.FromArgb(12, 15, 20);
                 listBox.ForeColor = Text;
-                listBox.BorderStyle = BorderStyle.FixedSingle;
+                listBox.BorderStyle = BorderStyle.None;
                 break;
             case ComboBox comboBox:
                 comboBox.BackColor = Color.FromArgb(12, 15, 20);
@@ -83,7 +84,11 @@ internal static class UiTheme
                 tabPage.ForeColor = Text;
                 break;
             case TableLayoutPanel or FlowLayoutPanel or Panel:
-                control.BackColor = Background;
+                if (control.BackColor == SystemColors.Control)
+                {
+                    control.BackColor = Background;
+                }
+
                 control.ForeColor = Text;
                 break;
             case Label label:
