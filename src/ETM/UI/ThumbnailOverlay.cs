@@ -17,6 +17,7 @@ internal sealed class ThumbnailOverlay : Form
     private readonly DwmThumbnail thumbnail = new();
     private readonly GlobalSettings snapSettings;
     private readonly Func<ThumbnailOverlay, IReadOnlyCollection<Rectangle>> otherOverlayBoundsProvider;
+    private readonly Func<ThumbnailOverlay, IReadOnlyCollection<Size>> otherOverlaySizesProvider;
     private AppearanceDefaults appearance;
     private ContextMenuStrip? overlayMenu;
     private TextOverlay? textOverlay;
@@ -36,6 +37,7 @@ internal sealed class ThumbnailOverlay : Form
 
     internal event EventHandler? OverlayStateChanged;
     internal event EventHandler? SourceFocusRequested;
+    internal event EventHandler? ResetSizeRequested;
     internal event EventHandler<ThumbnailResizeEventArgs>? ResizeAllRequested;
 
     internal bool ThumbnailsLocked { get; set; }
@@ -154,6 +156,7 @@ internal sealed class ThumbnailOverlay : Form
         GlobalSettings snapSettings,
         AppearanceDefaults appearance,
         Func<ThumbnailOverlay, IReadOnlyCollection<Rectangle>> otherOverlayBoundsProvider,
+        Func<ThumbnailOverlay, IReadOnlyCollection<Size>> otherOverlaySizesProvider,
         Rectangle? initialBounds = null,
         byte opacity = byte.MaxValue,
         string customLabel = "")
@@ -162,6 +165,7 @@ internal sealed class ThumbnailOverlay : Form
         this.snapSettings = snapSettings;
         this.appearance = appearance;
         this.otherOverlayBoundsProvider = otherOverlayBoundsProvider;
+        this.otherOverlaySizesProvider = otherOverlaySizesProvider;
         this.opacity = opacity;
         this.customLabel = customLabel.Trim();
 
@@ -503,8 +507,7 @@ internal sealed class ThumbnailOverlay : Form
 
     private void ResetSize()
     {
-        Size = new Size(320, 180);
-        OnOverlayStateChanged();
+        ResetSizeRequested?.Invoke(this, EventArgs.Empty);
     }
 
     private void HideThumbnail()
@@ -596,7 +599,27 @@ internal sealed class ThumbnailOverlay : Form
             }
         }
 
-        return new Rectangle(dragStartBounds.Location, new Size(width, height));
+        return new Rectangle(dragStartBounds.Location, SnapResizeSize(new Size(width, height)));
+    }
+
+    private Size SnapResizeSize(Size size)
+    {
+        int threshold = Math.Max(0, snapSettings.SnapThreshold);
+        if (threshold == 0)
+        {
+            return size;
+        }
+
+        foreach (Size peerSize in otherOverlaySizesProvider(this))
+        {
+            if (Math.Abs(size.Width - peerSize.Width) <= threshold
+                || Math.Abs(size.Height - peerSize.Height) <= threshold)
+            {
+                return peerSize;
+            }
+        }
+
+        return size;
     }
 
     private Rectangle SnapMovingBounds(Rectangle movingBounds, bool includeEdges)

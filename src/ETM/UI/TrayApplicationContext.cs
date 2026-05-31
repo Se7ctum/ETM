@@ -19,6 +19,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly HotkeyMessageWindow hotkeyWindow;
     private readonly HotkeyManager hotkeyManager;
     private readonly Dictionary<IntPtr, ThumbnailOverlay> overlays = new();
+    private readonly Dictionary<string, Rectangle> savedOverlayBounds = new(StringComparer.OrdinalIgnoreCase);
     private readonly AppSettings settings;
     private Profile activeProfile;
     private ConfigWindow? configWindow;
@@ -33,6 +34,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         settings = SettingsManager.Load();
         activeProfile = GetActiveProfile();
+        CaptureSavedOverlayBoundsSnapshot();
         thumbnailsLocked = activeProfile.ThumbnailsLocked;
 
         trayIcon = new NotifyIcon
@@ -80,7 +82,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Configure...", null, (_, _) => OpenConfiguration());
         menu.Items.Add("Reload thumbnails", null, (_, _) => ReloadThumbnails());
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Save positions", null, (_, _) => SavePositions());
+        menu.Items.Add("Save position and size", null, (_, _) => SavePositions());
         menu.Items.Add("Restore positions", null, (_, _) => ReloadThumbnails());
         menu.Items.Add(new ToolStripSeparator());
 
@@ -283,6 +285,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 settings.Global,
                 activeProfile.Appearance,
                 GetOtherOverlayBounds,
+                GetOtherOverlaySizes,
                 bounds,
                 opacity,
                 state?.CustomLabel ?? string.Empty)
@@ -295,6 +298,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             overlay.OverlayStateChanged += OverlayStateChanged;
             overlay.SourceFocusRequested += OverlaySourceFocusRequested;
             overlay.ResizeAllRequested += OverlayResizeAllRequested;
+            overlay.ResetSizeRequested += OverlayResetSizeRequested;
             overlays.Add(eveWindow.Handle, overlay);
 
             if (overlay.Visible)
@@ -310,6 +314,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 overlay.OverlayStateChanged -= OverlayStateChanged;
                 overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
                 overlay.ResizeAllRequested -= OverlayResizeAllRequested;
+                overlay.ResetSizeRequested -= OverlayResetSizeRequested;
                 overlay.Dispose();
             }
 
@@ -334,6 +339,14 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return overlays.Values
             .Where(candidate => !ReferenceEquals(candidate, overlay) && !candidate.IsDisposed)
             .Select(candidate => candidate.Bounds)
+            .ToList();
+    }
+
+    private IReadOnlyCollection<Size> GetOtherOverlaySizes(ThumbnailOverlay overlay)
+    {
+        return overlays.Values
+            .Where(candidate => !ReferenceEquals(candidate, overlay) && !candidate.IsDisposed)
+            .Select(candidate => candidate.Size)
             .ToList();
     }
 
@@ -381,6 +394,26 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ScheduleSave();
     }
 
+    private void OverlayResetSizeRequested(object? sender, EventArgs e)
+    {
+        if (sender is not ThumbnailOverlay overlay)
+        {
+            return;
+        }
+
+        if (savedOverlayBounds.TryGetValue(overlay.CharacterName, out Rectangle savedBounds))
+        {
+            overlay.SetThumbnailSize(savedBounds.Size);
+            return;
+        }
+
+        OverlayState? state = FindOverlayState(overlay.CharacterName);
+        if (state is not null)
+        {
+            overlay.SetThumbnailSize(RestoreBounds(state).Size);
+        }
+    }
+
     private void ScheduleSave()
     {
         if (isShuttingDown)
@@ -400,6 +433,19 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         SettingsManager.Save(settings);
+        CaptureSavedOverlayBoundsSnapshot();
+    }
+
+    private void CaptureSavedOverlayBoundsSnapshot()
+    {
+        savedOverlayBounds.Clear();
+        foreach (OverlayState state in activeProfile.Overlays)
+        {
+            if (!string.IsNullOrWhiteSpace(state.CharacterName))
+            {
+                savedOverlayBounds[state.CharacterName] = RestoreBounds(state);
+            }
+        }
     }
 
     private void UpdateOverlayState(ThumbnailOverlay overlay)
@@ -505,6 +551,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             isSwitchingProfile = true;
             activeProfile = profile;
+            CaptureSavedOverlayBoundsSnapshot();
             settings.ActiveProfileName = profile.Name;
             thumbnailsLocked = activeProfile.ThumbnailsLocked;
             lockThumbnailsMenuItem.Checked = thumbnailsLocked;
@@ -726,6 +773,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             overlay.OverlayStateChanged -= OverlayStateChanged;
             overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
             overlay.ResizeAllRequested -= OverlayResizeAllRequested;
+            overlay.ResetSizeRequested -= OverlayResetSizeRequested;
             overlay.Dispose();
         }
 
