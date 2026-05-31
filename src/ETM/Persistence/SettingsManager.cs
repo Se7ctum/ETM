@@ -126,6 +126,13 @@ internal static class SettingsManager
         }
 
         profile.Appearance ??= new AppearanceDefaults();
+        if (string.Equals(profile.Appearance.LabelFont, "Segoe UI", StringComparison.OrdinalIgnoreCase)
+            && profile.Appearance.LabelFontSize == 9)
+        {
+            profile.Appearance.LabelFont = "Segoe UI Semibold";
+            profile.Appearance.LabelFontSize = 10;
+        }
+
         return profile;
     }
 }

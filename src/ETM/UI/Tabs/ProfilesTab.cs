@@ -1,4 +1,5 @@
 ﻿using ETM.Persistence;
+using ETM.UI;
 
 namespace ETM.UI.Tabs;
 
@@ -11,6 +12,8 @@ internal sealed class ProfilesTab : UserControl
     private readonly ListBox profilesList = new();
     private readonly NumericUpDown autoLoadCount = new();
     private readonly TextBox autoLoadCharacters = new();
+    private readonly Label activeProfileLabel = new();
+    private bool isLoadingProfileDetails;
 
     internal ProfilesTab(AppSettings settings, Profile activeProfile, Action saveRequested, Action<string> activeProfileChanged)
     {
@@ -24,14 +27,15 @@ internal sealed class ProfilesTab : UserControl
 
     private void BuildUi()
     {
-        TableLayoutPanel root = new() { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(12) };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 240));
+        TableLayoutPanel root = new() { Dock = DockStyle.Fill, ColumnCount = 2, Padding = new Padding(18) };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         profilesList.Dock = DockStyle.Fill;
+        profilesList.SelectedIndexChanged += (_, _) => LoadSelectedProfileDetails();
         root.Controls.Add(profilesList, 0, 0);
 
-        FlowLayoutPanel buttons = new() { Dock = DockStyle.Bottom, AutoSize = true };
+        FlowLayoutPanel buttons = new() { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(0, 12, 0, 0) };
         buttons.Controls.Add(MakeButton("New", (_, _) => AddProfile()));
         buttons.Controls.Add(MakeButton("Rename", (_, _) => RenameSelected()));
         buttons.Controls.Add(MakeButton("Duplicate", (_, _) => DuplicateSelected()));
@@ -45,20 +49,51 @@ internal sealed class ProfilesTab : UserControl
         left.Controls.Add(buttons);
         root.Controls.Add(left, 0, 0);
 
-        TableLayoutPanel details = new() { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
-        details.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 160));
+        TableLayoutPanel details = new() { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2, Padding = new Padding(18, 0, 0, 0) };
+        details.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 190));
         details.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        activeProfileLabel.Text = $"Active profile: {settings.ActiveProfileName}";
+        activeProfileLabel.AutoSize = true;
+        activeProfileLabel.Font = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point);
+        details.Controls.Add(activeProfileLabel, 0, 0);
+        details.SetColumnSpan(activeProfileLabel, 2);
+
         autoLoadCount.Minimum = 0;
         autoLoadCount.Maximum = 64;
-        autoLoadCount.Value = activeProfile.AutoLoadClientCount ?? 0;
-        autoLoadCount.ValueChanged += (_, _) => { activeProfile.AutoLoadClientCount = autoLoadCount.Value == 0 ? null : (int)autoLoadCount.Value; saveRequested(); };
-        autoLoadCharacters.Text = string.Join(", ", activeProfile.AutoLoadCharacters);
-        autoLoadCharacters.TextChanged += (_, _) => { activeProfile.AutoLoadCharacters = autoLoadCharacters.Text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList(); saveRequested(); };
-        AddRow(details, "Auto-load count", autoLoadCount);
-        AddRow(details, "Auto-load characters", autoLoadCharacters);
+        autoLoadCount.ValueChanged += (_, _) =>
+        {
+            if (isLoadingProfileDetails || SelectedProfile is not { } selectedProfile)
+            {
+                return;
+            }
+
+            selectedProfile.AutoLoadClientCount = autoLoadCount.Value == 0 ? null : (int)autoLoadCount.Value;
+            saveRequested();
+        };
+        autoLoadCharacters.Multiline = true;
+        autoLoadCharacters.AcceptsReturn = true;
+        autoLoadCharacters.ScrollBars = ScrollBars.Vertical;
+        autoLoadCharacters.Height = 150;
+        autoLoadCharacters.TextChanged += (_, _) =>
+        {
+            if (isLoadingProfileDetails || SelectedProfile is not { } selectedProfile)
+            {
+                return;
+            }
+
+            selectedProfile.AutoLoadCharacters = SplitCharacterRules(autoLoadCharacters.Text);
+            saveRequested();
+        };
+        AddSectionText(details, "Profile activation rules", "ETM can switch to this profile automatically when your running EVE clients match these rules. Leave fields empty to switch manually.");
+        AddRow(details, "If these characters are active", autoLoadCharacters);
+        AddRow(details, "Also require client count", autoLoadCount);
         root.Controls.Add(details, 1, 0);
         Controls.Add(root);
     }
+
+    private Profile? SelectedProfile => profilesList.SelectedIndex >= 0 && profilesList.SelectedIndex < settings.Profiles.Count
+        ? settings.Profiles[profilesList.SelectedIndex]
+        : null;
 
     private void RefreshProfiles()
     {
@@ -77,6 +112,31 @@ internal sealed class ProfilesTab : UserControl
             {
                 profilesList.SelectedIndex = selectedIndex;
             }
+        }
+
+        if (profilesList.SelectedIndex < 0 && profilesList.Items.Count > 0)
+        {
+            int activeIndex = settings.Profiles.FindIndex(profile =>
+                string.Equals(profile.Name, settings.ActiveProfileName, StringComparison.OrdinalIgnoreCase));
+            profilesList.SelectedIndex = activeIndex >= 0 ? activeIndex : 0;
+        }
+
+        LoadSelectedProfileDetails();
+    }
+
+    private void LoadSelectedProfileDetails()
+    {
+        isLoadingProfileDetails = true;
+        try
+        {
+            Profile? selectedProfile = SelectedProfile;
+            autoLoadCount.Value = selectedProfile?.AutoLoadClientCount ?? 0;
+            autoLoadCharacters.Text = selectedProfile is null ? string.Empty : string.Join(Environment.NewLine, selectedProfile.AutoLoadCharacters);
+            activeProfileLabel.Text = $"Active profile: {settings.ActiveProfileName}";
+        }
+        finally
+        {
+            isLoadingProfileDetails = false;
         }
     }
 
@@ -147,6 +207,7 @@ internal sealed class ProfilesTab : UserControl
         if (profilesList.SelectedItem is string name)
         {
             settings.ActiveProfileName = name;
+            activeProfileLabel.Text = $"Active profile: {settings.ActiveProfileName}";
             activeProfileChanged(name);
             saveRequested();
         }
@@ -298,7 +359,8 @@ internal sealed class ProfilesTab : UserControl
                 LabelFont = source.Appearance.LabelFont,
                 LabelFontSize = source.Appearance.LabelFontSize,
                 LabelPosition = source.Appearance.LabelPosition,
-                DefaultOpacity = source.Appearance.DefaultOpacity
+                DefaultOpacity = source.Appearance.DefaultOpacity,
+                ShowHotkeyInLabel = source.Appearance.ShowHotkeyInLabel
             },
             ThumbnailsLocked = source.ThumbnailsLocked
         };
@@ -306,7 +368,7 @@ internal sealed class ProfilesTab : UserControl
 
     private static Button MakeButton(string text, EventHandler click)
     {
-        Button button = new() { Text = text, AutoSize = true };
+        Button button = new() { Text = text, AutoSize = true, MinimumSize = new Size(92, 36), Margin = new Padding(0, 0, 8, 8) };
         button.Click += click;
         return button;
     }
@@ -314,9 +376,41 @@ internal sealed class ProfilesTab : UserControl
     private static void AddRow(TableLayoutPanel panel, string label, Control control)
     {
         panel.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        panel.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 6, 0, 0) });
+        panel.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Padding = new Padding(0, 10, 0, 0) });
         control.Dock = DockStyle.Fill;
         panel.Controls.Add(control);
+    }
+
+    private static void AddSectionText(TableLayoutPanel panel, string title, string body)
+    {
+        Label titleLabel = new()
+        {
+            Text = title,
+            AutoSize = true,
+            Font = new Font("Segoe UI", 11F, FontStyle.Bold, GraphicsUnit.Point),
+            Padding = new Padding(0, 24, 0, 4)
+        };
+        Label bodyLabel = new()
+        {
+            Text = body,
+            AutoSize = false,
+            Height = 48,
+            Dock = DockStyle.Fill,
+            ForeColor = UiTheme.MutedText
+        };
+
+        panel.Controls.Add(titleLabel);
+        panel.SetColumnSpan(titleLabel, 2);
+        panel.Controls.Add(bodyLabel);
+        panel.SetColumnSpan(bodyLabel, 2);
+    }
+
+    private static List<string> SplitCharacterRules(string value)
+    {
+        return value
+            .Split([',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(character => !string.IsNullOrWhiteSpace(character))
+            .ToList();
     }
 
     private static string? PromptForText(string title, string label, string initialValue)

@@ -19,8 +19,8 @@ internal sealed class AppearanceDefaults
     public string LabelColor { get; set; } = "#FFFFFF";
     public bool LabelBackgroundEnabled { get; set; } = true;
     public bool ShowHotkeyInLabel { get; set; }
-    public string LabelFont { get; set; } = "Segoe UI";
-    public int LabelFontSize { get; set; } = 9;
+    public string LabelFont { get; set; } = "Segoe UI Semibold";
+    public int LabelFontSize { get; set; } = 10;
     public string LabelPosition { get; set; } = "TopLeft";
     public float DefaultOpacity { get; set; } = 1.0f;
 }

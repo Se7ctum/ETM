@@ -19,13 +19,18 @@ internal sealed class ConfigWindow : Form
 
         Text = "ETM Configuration";
         StartPosition = FormStartPosition.CenterScreen;
-        MinimumSize = new Size(760, 520);
-        Size = new Size(900, 640);
+        MinimumSize = new Size(900, 620);
+        Size = new Size(1040, 720);
+        Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
+        BackColor = UiTheme.Background;
+        ForeColor = UiTheme.Text;
 
         TabControl tabs = new()
         {
-            Dock = DockStyle.Fill
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point)
         };
+        UiTheme.StyleTabControl(tabs);
 
         AddTab(tabs, "Profiles", new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged));
         AddTab(tabs, "Thumbnails", new ThumbnailsTab(activeProfile, RequestSave));
@@ -34,6 +39,7 @@ internal sealed class ConfigWindow : Form
         AddTab(tabs, "System", new SystemTab(settings, RequestSave));
 
         Controls.Add(tabs);
+        UiTheme.Apply(this);
     }
 
     private static void AddTab(TabControl tabs, string title, Control content)

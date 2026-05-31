@@ -5,6 +5,7 @@ internal sealed class AppSettings
     public string ActiveProfileName { get; set; } = "Default";
     public List<Profile> Profiles { get; set; } = new();
     public GlobalSettings Global { get; set; } = new();
+    public bool SetupCompleted { get; set; }
 }
 
 internal sealed class GlobalSettings

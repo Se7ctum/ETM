@@ -6,6 +6,7 @@ internal sealed class AppearanceTab : UserControl
 {
     private static readonly string[] PopularFonts =
     [
+        "Segoe UI Semibold",
         "Segoe UI",
         "Arial",
         "Calibri",

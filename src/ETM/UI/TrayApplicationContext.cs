@@ -73,6 +73,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         refreshTimer.Start();
 
         RefreshThumbnails();
+        QueueSetupWizardIfNeeded();
     }
 
     private ContextMenuStrip BuildContextMenu()
@@ -80,7 +81,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         ContextMenuStrip menu = new();
 
         menu.Items.Add("Configure...", null, (_, _) => OpenConfiguration());
+        menu.Items.Add("Setup wizard...", null, (_, _) => OpenSetupWizard());
         menu.Items.Add("Reload thumbnails", null, (_, _) => ReloadThumbnails());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(BuildProfilesMenu());
+        menu.Items.Add(BuildLayoutMenu());
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Save position and size", null, (_, _) => SavePositions());
         menu.Items.Add("Restore positions", null, (_, _) => ReloadThumbnails());
@@ -108,6 +113,37 @@ internal sealed class TrayApplicationContext : ApplicationContext
         menu.Items.Add("Exit", null, (_, _) => ExitApplication());
 
         return menu;
+    }
+
+    private ToolStripMenuItem BuildProfilesMenu()
+    {
+        ToolStripMenuItem profilesMenu = new("Profiles");
+        profilesMenu.DropDownOpening += (_, _) =>
+        {
+            profilesMenu.DropDownItems.Clear();
+            foreach (Profile profile in settings.Profiles)
+            {
+                ToolStripMenuItem item = new(profile.Name)
+                {
+                    Checked = string.Equals(profile.Name, settings.ActiveProfileName, StringComparison.OrdinalIgnoreCase)
+                };
+                item.Click += (_, _) => SwitchActiveProfile(profile.Name);
+                profilesMenu.DropDownItems.Add(item);
+            }
+        };
+
+        return profilesMenu;
+    }
+
+    private ToolStripMenuItem BuildLayoutMenu()
+    {
+        ToolStripMenuItem layoutMenu = new("Layout tools");
+        layoutMenu.DropDownItems.Add("Same size", null, (_, _) => MakeAllThumbnailsSameSize());
+        layoutMenu.DropDownItems.Add("Arrange in row", null, (_, _) => ArrangeThumbnails(row: true));
+        layoutMenu.DropDownItems.Add("Arrange in column", null, (_, _) => ArrangeThumbnails(row: false));
+        layoutMenu.DropDownItems.Add("Align top", null, (_, _) => AlignThumbnails(alignTop: true));
+        layoutMenu.DropDownItems.Add("Align left", null, (_, _) => AlignThumbnails(alignTop: false));
+        return layoutMenu;
     }
 
     private static Icon LoadTrayIcon()
@@ -228,6 +264,107 @@ internal sealed class TrayApplicationContext : ApplicationContext
         RefreshThumbnails();
     }
 
+    private void QueueSetupWizardIfNeeded()
+    {
+        if (settings.SetupCompleted)
+        {
+            return;
+        }
+
+        System.Windows.Forms.Timer setupTimer = new() { Interval = 500 };
+        setupTimer.Tick += (_, _) =>
+        {
+            setupTimer.Stop();
+            setupTimer.Dispose();
+            OpenSetupWizard();
+        };
+        setupTimer.Start();
+    }
+
+    private void OpenSetupWizard()
+    {
+        using SetupWizard wizard = new(settings, activeProfile, ApplySettingsChanges);
+        wizard.ShowDialog(configWindow);
+        thumbnailsLocked = activeProfile.ThumbnailsLocked;
+        lockThumbnailsMenuItem.Checked = thumbnailsLocked;
+        ApplyThumbnailLockState();
+        ApplyOverlaySettings();
+    }
+
+    private void MakeAllThumbnailsSameSize()
+    {
+        ThumbnailOverlay? source = overlays.Values
+            .Where(overlay => !overlay.IsDisposed && overlay.Visible)
+            .OrderBy(overlay => overlay.Top)
+            .ThenBy(overlay => overlay.Left)
+            .FirstOrDefault();
+        if (source is null)
+        {
+            return;
+        }
+
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            if (overlay.IsDisposed)
+            {
+                continue;
+            }
+
+            overlay.SetThumbnailSize(source.Size);
+            UpdateOverlayState(overlay);
+        }
+
+        SavePositions();
+    }
+
+    private void ArrangeThumbnails(bool row)
+    {
+        List<ThumbnailOverlay> visibleOverlays = GetVisibleOverlaysInLayoutOrder();
+        if (visibleOverlays.Count == 0)
+        {
+            return;
+        }
+
+        const int gap = 12;
+        Point start = visibleOverlays[0].Location;
+        int offset = 0;
+        foreach (ThumbnailOverlay overlay in visibleOverlays)
+        {
+            overlay.Location = row ? new Point(start.X + offset, start.Y) : new Point(start.X, start.Y + offset);
+            offset += row ? overlay.Width + gap : overlay.Height + gap;
+            UpdateOverlayState(overlay);
+        }
+
+        SavePositions();
+    }
+
+    private void AlignThumbnails(bool alignTop)
+    {
+        List<ThumbnailOverlay> visibleOverlays = GetVisibleOverlaysInLayoutOrder();
+        if (visibleOverlays.Count == 0)
+        {
+            return;
+        }
+
+        int target = alignTop ? visibleOverlays.Min(overlay => overlay.Top) : visibleOverlays.Min(overlay => overlay.Left);
+        foreach (ThumbnailOverlay overlay in visibleOverlays)
+        {
+            overlay.Location = alignTop ? new Point(overlay.Left, target) : new Point(target, overlay.Top);
+            UpdateOverlayState(overlay);
+        }
+
+        SavePositions();
+    }
+
+    private List<ThumbnailOverlay> GetVisibleOverlaysInLayoutOrder()
+    {
+        return overlays.Values
+            .Where(overlay => !overlay.IsDisposed && overlay.Visible)
+            .OrderBy(overlay => overlay.Top)
+            .ThenBy(overlay => overlay.Left)
+            .ToList();
+    }
+
     private bool TryAutoLoadProfile(IReadOnlyCollection<EveWindow> detectedWindows)
     {
         if (isSwitchingProfile || settings.Profiles.Count < 2)
@@ -235,8 +372,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return false;
         }
 
-        Profile? matchingProfile = FindCharacterAutoLoadProfile(detectedWindows)
-            ?? FindCountAutoLoadProfile(detectedWindows.Count);
+        Profile? matchingProfile = FindMatchingRuleProfile(detectedWindows);
         if (matchingProfile is null || ReferenceEquals(matchingProfile, activeProfile))
         {
             return false;
@@ -246,29 +382,28 @@ internal sealed class TrayApplicationContext : ApplicationContext
         return true;
     }
 
-    private Profile? FindCharacterAutoLoadProfile(IEnumerable<EveWindow> detectedWindows)
+    private Profile? FindMatchingRuleProfile(IReadOnlyCollection<EveWindow> detectedWindows)
     {
         HashSet<string> detectedCharacters = detectedWindows
             .Select(window => window.CharacterName)
             .Where(characterName => !string.IsNullOrWhiteSpace(characterName))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (detectedCharacters.Count == 0)
+
+        return settings.Profiles.FirstOrDefault(profile =>
         {
-            return null;
-        }
+            bool hasCharacterRule = profile.AutoLoadCharacters.Count > 0;
+            bool hasCountRule = profile.AutoLoadClientCount.HasValue;
+            if (!hasCharacterRule && !hasCountRule)
+            {
+                return false;
+            }
 
-        return settings.Profiles.FirstOrDefault(profile =>
-            profile.AutoLoadCharacters.Count > 0
-            && profile.AutoLoadCharacters.All(characterName =>
+            bool charactersMatch = !hasCharacterRule || profile.AutoLoadCharacters.All(characterName =>
                 !string.IsNullOrWhiteSpace(characterName)
-                && detectedCharacters.Contains(characterName)));
-    }
-
-    private Profile? FindCountAutoLoadProfile(int clientCount)
-    {
-        return settings.Profiles.FirstOrDefault(profile =>
-            profile.AutoLoadClientCount.HasValue
-            && profile.AutoLoadClientCount.Value == clientCount);
+                && detectedCharacters.Contains(characterName));
+            bool countMatches = !hasCountRule || profile.AutoLoadClientCount.GetValueOrDefault() == detectedWindows.Count;
+            return charactersMatch && countMatches;
+        });
     }
 
     private void CreateOverlay(EveWindow eveWindow)
