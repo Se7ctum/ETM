@@ -802,7 +802,6 @@ internal sealed class ThumbnailOverlay : Form
 
     private sealed class TextOverlay : Form
     {
-        private const int RenderScale = 3;
         private const int PaddingX = 8;
         private const int PaddingY = 4;
         private readonly ThumbnailOverlay owner;
@@ -834,10 +833,10 @@ internal sealed class ThumbnailOverlay : Form
         internal void UpdateText(string text, AppearanceDefaults appearance)
         {
             using Font font = CreateFont(appearance);
-            SizeF measured = MeasureText(text, font);
+            Size measured = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
             Size overlaySize = new(
-                Math.Max(1, (int)Math.Ceiling(measured.Width) + PaddingX * 2),
-                Math.Max(1, (int)Math.Ceiling(measured.Height) + PaddingY * 2));
+                Math.Max(1, measured.Width + PaddingX * 2),
+                Math.Max(1, measured.Height + PaddingY * 2));
             Point location = GetLocation(overlaySize, appearance);
 
             using Bitmap bitmap = RenderTextBitmap(text, font, appearance, overlaySize);
@@ -851,45 +850,31 @@ internal sealed class ThumbnailOverlay : Form
             EnsureAboveOwner();
         }
 
-        private static SizeF MeasureText(string text, Font font)
-        {
-            using Bitmap bitmap = new(1, 1, PixelFormat.Format32bppPArgb);
-            using Graphics graphics = Graphics.FromImage(bitmap);
-            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
-            return graphics.MeasureString(text, font, int.MaxValue, StringFormat.GenericTypographic);
-        }
-
         private static Bitmap RenderTextBitmap(string text, Font font, AppearanceDefaults appearance, Size overlaySize)
         {
-            using Bitmap highResolutionBitmap = new(
-                overlaySize.Width * RenderScale,
-                overlaySize.Height * RenderScale,
-                PixelFormat.Format32bppPArgb);
+            using Bitmap mask = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
+            using Graphics maskGraphics = Graphics.FromImage(mask);
+            maskGraphics.Clear(Color.Black);
+            TextRenderer.DrawText(
+                maskGraphics,
+                text,
+                font,
+                new Point(PaddingX, PaddingY),
+                Color.White,
+                Color.Black,
+                TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
 
-            using (Graphics graphics = Graphics.FromImage(highResolutionBitmap))
-            {
-                graphics.Clear(Color.Transparent);
-                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
-                graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
-                graphics.ScaleTransform(RenderScale, RenderScale);
-
-                using Brush brush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
-                graphics.DrawString(text, font, brush, PaddingX, PaddingY, StringFormat.GenericTypographic);
-            }
-
+            Color labelColor = ParseColor(appearance.LabelColor, Color.White);
             Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
-            using Graphics finalGraphics = Graphics.FromImage(bitmap);
-            finalGraphics.Clear(Color.Transparent);
-            finalGraphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
-            finalGraphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
-            finalGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-            finalGraphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
-            finalGraphics.DrawImage(
-                highResolutionBitmap,
-                new Rectangle(0, 0, overlaySize.Width, overlaySize.Height),
-                new Rectangle(0, 0, highResolutionBitmap.Width, highResolutionBitmap.Height),
-                GraphicsUnit.Pixel);
+            for (int y = 0; y < overlaySize.Height; y++)
+            {
+                for (int x = 0; x < overlaySize.Width; x++)
+                {
+                    Color maskPixel = mask.GetPixel(x, y);
+                    int alpha = Math.Max(maskPixel.R, Math.Max(maskPixel.G, maskPixel.B));
+                    bitmap.SetPixel(x, y, Color.FromArgb(alpha, labelColor));
+                }
+            }
 
             return bitmap;
         }
