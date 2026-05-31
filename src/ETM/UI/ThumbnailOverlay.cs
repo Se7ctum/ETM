@@ -1,4 +1,5 @@
 ﻿using System.Runtime.InteropServices;
+using System.Drawing.Imaging;
 using ETM.Core;
 using ETM.Persistence;
 
@@ -18,6 +19,7 @@ internal sealed class ThumbnailOverlay : Form
     private readonly Func<ThumbnailOverlay, IReadOnlyCollection<Rectangle>> otherOverlayBoundsProvider;
     private AppearanceDefaults appearance;
     private ContextMenuStrip? overlayMenu;
+    private TextOverlay? textOverlay;
     private bool isMenuOpen;
     private string customLabel = string.Empty;
     private string directHotkey = string.Empty;
@@ -49,6 +51,7 @@ internal sealed class ThumbnailOverlay : Form
             }
 
             isActiveClient = value;
+            UpdateTextOverlay();
             Invalidate();
         }
     }
@@ -110,6 +113,7 @@ internal sealed class ThumbnailOverlay : Form
             }
 
             customLabel = normalized;
+            UpdateTextOverlay();
             Invalidate();
             OnOverlayStateChanged();
         }
@@ -200,6 +204,8 @@ internal sealed class ThumbnailOverlay : Form
             0,
             0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+
+        textOverlay?.EnsureAboveOwner();
     }
 
     internal void ApplySettings(OverlayState? state, AppearanceDefaults appearanceDefaults)
@@ -214,14 +220,15 @@ internal sealed class ThumbnailOverlay : Form
         }
 
         UpdateThumbnail();
+        UpdateTextOverlay();
         Invalidate();
     }
 
     internal void SetLabelHotkey(string hotkey)
     {
         directHotkey = hotkey.Trim();
+        UpdateTextOverlay();
         Invalidate();
-        UpdateThumbnail();
     }
 
     internal void UpdateEveWindow(EveWindow updatedWindow)
@@ -239,6 +246,7 @@ internal sealed class ThumbnailOverlay : Form
 
         eveWindow = updatedWindow;
         customLabel = string.Empty;
+        UpdateTextOverlay();
         Invalidate();
         OnOverlayStateChanged();
     }
@@ -257,6 +265,7 @@ internal sealed class ThumbnailOverlay : Form
         base.OnShown(e);
         RegisterThumbnail();
         UpdateThumbnail();
+        UpdateTextOverlay();
         EnsureAlwaysOnTop();
     }
 
@@ -264,7 +273,20 @@ internal sealed class ThumbnailOverlay : Form
     {
         base.OnResize(e);
         UpdateThumbnail();
+        UpdateTextOverlay();
         Invalidate();
+    }
+
+    protected override void OnLocationChanged(EventArgs e)
+    {
+        base.OnLocationChanged(e);
+        UpdateTextOverlay();
+    }
+
+    protected override void OnVisibleChanged(EventArgs e)
+    {
+        base.OnVisibleChanged(e);
+        UpdateTextOverlay();
     }
 
     protected override void OnPaint(PaintEventArgs e)
@@ -282,17 +304,7 @@ internal sealed class ThumbnailOverlay : Form
             e.Graphics.DrawRectangle(borderPen, border);
         }
 
-        string label = DisplayLabel;
-        if (!string.IsNullOrWhiteSpace(label))
-        {
-            string fontName = string.IsNullOrWhiteSpace(appearance.LabelFont) ? "Segoe UI" : appearance.LabelFont;
-            float fontSize = Math.Clamp(appearance.LabelFontSize, 6, 32);
-            using Font font = new(fontName, fontSize, FontStyle.Regular, GraphicsUnit.Point);
-            SizeF textSize = e.Graphics.MeasureString(label, font);
-            PointF labelPoint = GetLabelPoint(textSize);
-            using Brush labelBrush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
-            e.Graphics.DrawString(label, font, labelBrush, labelPoint);
-        }
+        UpdateTextOverlay();
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -465,23 +477,6 @@ internal sealed class ThumbnailOverlay : Form
         {
             return fallback;
         }
-    }
-
-    private PointF GetLabelPoint(SizeF textSize)
-    {
-        const float horizontalPadding = 8f;
-        const float verticalPadding = 6f;
-        int borderWidth = Math.Max(0, appearance.BorderWidth);
-        string position = appearance.LabelPosition.Trim();
-
-        float x = position.Contains("Right", StringComparison.OrdinalIgnoreCase)
-            ? ClientSize.Width - borderWidth - textSize.Width - horizontalPadding
-            : borderWidth + horizontalPadding;
-        float y = position.Contains("Bottom", StringComparison.OrdinalIgnoreCase)
-            ? ClientSize.Height - borderWidth - textSize.Height - verticalPadding
-            : borderWidth + verticalPadding;
-
-        return new PointF(Math.Max(borderWidth, x), Math.Max(borderWidth, y));
     }
 
     private string GetHotkeyLabel()
@@ -771,6 +766,19 @@ internal sealed class ThumbnailOverlay : Form
             Math.Max(1, ClientSize.Height - borderWidth * 2));
     }
 
+    private void UpdateTextOverlay()
+    {
+        string label = DisplayLabel;
+        if (IsDisposed || !Visible || string.IsNullOrWhiteSpace(label))
+        {
+            textOverlay?.Hide();
+            return;
+        }
+
+        textOverlay ??= new TextOverlay(this);
+        textOverlay.UpdateText(label, appearance);
+    }
+
     private static string FormatHotkeyForLabel(string hotkey)
     {
         return hotkey
@@ -785,10 +793,144 @@ internal sealed class ThumbnailOverlay : Form
     {
         if (disposing)
         {
+            textOverlay?.Dispose();
             thumbnail.Dispose();
         }
 
         base.Dispose(disposing);
+    }
+
+    private sealed class TextOverlay : Form
+    {
+        private const int PaddingX = 8;
+        private const int PaddingY = 4;
+        private readonly ThumbnailOverlay owner;
+
+        internal TextOverlay(ThumbnailOverlay owner)
+        {
+            this.owner = owner;
+            FormBorderStyle = FormBorderStyle.None;
+            ShowInTaskbar = false;
+            TopMost = true;
+            StartPosition = FormStartPosition.Manual;
+        }
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                CreateParams createParams = base.CreateParams;
+                createParams.ExStyle |= NativeMethods.WS_EX_LAYERED
+                    | NativeMethods.WS_EX_NOACTIVATE
+                    | NativeMethods.WS_EX_TOOLWINDOW
+                    | NativeMethods.WS_EX_TRANSPARENT;
+                return createParams;
+            }
+        }
+
+        protected override bool ShowWithoutActivation => true;
+
+        internal void UpdateText(string text, AppearanceDefaults appearance)
+        {
+            using Font font = CreateFont(appearance);
+            Size measured = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding);
+            Size overlaySize = new(Math.Max(1, measured.Width + PaddingX * 2), Math.Max(1, measured.Height + PaddingY * 2));
+            Point location = GetLocation(overlaySize, appearance);
+
+            using Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
+            using (Graphics graphics = Graphics.FromImage(bitmap))
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                using Brush brush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
+                graphics.DrawString(text, font, brush, PaddingX, PaddingY);
+            }
+
+            if (!Visible)
+            {
+                Show(owner);
+            }
+
+            UpdateLayeredBitmap(bitmap, location);
+            EnsureAboveOwner();
+        }
+
+        internal void EnsureAboveOwner()
+        {
+            if (!IsHandleCreated || owner.IsDisposed || !owner.Visible)
+            {
+                return;
+            }
+
+            _ = NativeMethods.SetWindowPos(
+                Handle,
+                NativeMethods.HWND_TOPMOST,
+                0,
+                0,
+                0,
+                0,
+                NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+        }
+
+        private void UpdateLayeredBitmap(Bitmap bitmap, Point location)
+        {
+            IntPtr screenDc = NativeMethods.GetDC(IntPtr.Zero);
+            IntPtr memoryDc = NativeMethods.CreateCompatibleDC(screenDc);
+            IntPtr bitmapHandle = bitmap.GetHbitmap(Color.FromArgb(0));
+            IntPtr oldBitmap = NativeMethods.SelectObject(memoryDc, bitmapHandle);
+
+            try
+            {
+                NativeMethods.POINT destination = new() { X = location.X, Y = location.Y };
+                NativeMethods.PSIZE size = new() { X = bitmap.Width, Y = bitmap.Height };
+                NativeMethods.POINT source = new() { X = 0, Y = 0 };
+                NativeMethods.BLENDFUNCTION blend = new()
+                {
+                    BlendOp = NativeMethods.AC_SRC_OVER,
+                    BlendFlags = 0,
+                    SourceConstantAlpha = 255,
+                    AlphaFormat = NativeMethods.AC_SRC_ALPHA
+                };
+
+                NativeMethods.UpdateLayeredWindow(
+                    Handle,
+                    screenDc,
+                    in destination,
+                    in size,
+                    memoryDc,
+                    in source,
+                    0,
+                    in blend,
+                    NativeMethods.ULW_ALPHA);
+            }
+            finally
+            {
+                NativeMethods.SelectObject(memoryDc, oldBitmap);
+                NativeMethods.DeleteObject(bitmapHandle);
+                NativeMethods.DeleteDC(memoryDc);
+                NativeMethods.ReleaseDC(IntPtr.Zero, screenDc);
+            }
+        }
+
+        private Point GetLocation(Size overlaySize, AppearanceDefaults appearance)
+        {
+            int borderWidth = Math.Max(0, appearance.BorderWidth);
+            int inset = Math.Max(4, borderWidth + 4);
+            string position = appearance.LabelPosition.Trim();
+            bool right = position.Contains("Right", StringComparison.OrdinalIgnoreCase);
+            bool bottom = position.Contains("Bottom", StringComparison.OrdinalIgnoreCase);
+
+            int x = right ? owner.Right - overlaySize.Width - inset : owner.Left + inset;
+            int y = bottom ? owner.Bottom - overlaySize.Height - inset : owner.Top + inset;
+            return new Point(x, y);
+        }
+
+        private static Font CreateFont(AppearanceDefaults appearance)
+        {
+            string fontName = string.IsNullOrWhiteSpace(appearance.LabelFont) ? "Segoe UI" : appearance.LabelFont;
+            float fontSize = Math.Clamp(appearance.LabelFontSize, 6, 32);
+            return new Font(fontName, fontSize, FontStyle.Regular, GraphicsUnit.Point);
+        }
     }
 }
 

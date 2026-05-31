@@ -19,6 +19,9 @@ internal static partial class NativeMethods
     internal const int SWP_NOMOVE = 0x0002;
     internal const int SWP_NOACTIVATE = 0x0010;
     internal const int SWP_SHOWWINDOW = 0x0040;
+    internal const int ULW_ALPHA = 0x00000002;
+    internal const byte AC_SRC_OVER = 0x00;
+    internal const byte AC_SRC_ALPHA = 0x01;
 
     internal static readonly IntPtr HWND_TOP = new(0);
     internal static readonly IntPtr HWND_TOPMOST = new(-1);
@@ -87,6 +90,15 @@ internal static partial class NativeMethods
     {
         internal int X;
         internal int Y;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 1)]
+    internal struct BLENDFUNCTION
+    {
+        internal byte BlendOp;
+        internal byte BlendFlags;
+        internal byte SourceConstantAlpha;
+        internal byte AlphaFormat;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -208,6 +220,39 @@ internal static partial class NativeMethods
         int cx,
         int cy,
         uint uFlags);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool UpdateLayeredWindow(
+        IntPtr hwnd,
+        IntPtr hdcDst,
+        in POINT pptDst,
+        in PSIZE psize,
+        IntPtr hdcSrc,
+        in POINT pptSrc,
+        uint crKey,
+        in BLENDFUNCTION pblend,
+        uint dwFlags);
+
+    [LibraryImport("user32.dll")]
+    internal static partial IntPtr GetDC(IntPtr hWnd);
+
+    [LibraryImport("user32.dll")]
+    internal static partial int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial IntPtr CreateCompatibleDC(IntPtr hdc);
+
+    [LibraryImport("gdi32.dll")]
+    internal static partial IntPtr SelectObject(IntPtr hdc, IntPtr h);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteObject(IntPtr ho);
+
+    [LibraryImport("gdi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool DeleteDC(IntPtr hdc);
 
     [LibraryImport("user32.dll")]
     internal static partial uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
