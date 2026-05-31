@@ -802,6 +802,7 @@ internal sealed class ThumbnailOverlay : Form
 
     private sealed class TextOverlay : Form
     {
+        private const int RenderScale = 3;
         private const int PaddingX = 8;
         private const int PaddingY = 4;
         private readonly ThumbnailOverlay owner;
@@ -833,18 +834,13 @@ internal sealed class ThumbnailOverlay : Form
         internal void UpdateText(string text, AppearanceDefaults appearance)
         {
             using Font font = CreateFont(appearance);
-            Size measured = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding);
-            Size overlaySize = new(Math.Max(1, measured.Width + PaddingX * 2), Math.Max(1, measured.Height + PaddingY * 2));
+            SizeF measured = MeasureText(text, font);
+            Size overlaySize = new(
+                Math.Max(1, (int)Math.Ceiling(measured.Width) + PaddingX * 2),
+                Math.Max(1, (int)Math.Ceiling(measured.Height) + PaddingY * 2));
             Point location = GetLocation(overlaySize, appearance);
 
-            using Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
-            using (Graphics graphics = Graphics.FromImage(bitmap))
-            {
-                graphics.Clear(Color.Transparent);
-                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
-                using Brush brush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
-                graphics.DrawString(text, font, brush, PaddingX, PaddingY);
-            }
+            using Bitmap bitmap = RenderTextBitmap(text, font, appearance, overlaySize);
 
             if (!Visible)
             {
@@ -853,6 +849,49 @@ internal sealed class ThumbnailOverlay : Form
 
             UpdateLayeredBitmap(bitmap, location);
             EnsureAboveOwner();
+        }
+
+        private static SizeF MeasureText(string text, Font font)
+        {
+            using Bitmap bitmap = new(1, 1, PixelFormat.Format32bppPArgb);
+            using Graphics graphics = Graphics.FromImage(bitmap);
+            graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+            return graphics.MeasureString(text, font, int.MaxValue, StringFormat.GenericTypographic);
+        }
+
+        private static Bitmap RenderTextBitmap(string text, Font font, AppearanceDefaults appearance, Size overlaySize)
+        {
+            using Bitmap highResolutionBitmap = new(
+                overlaySize.Width * RenderScale,
+                overlaySize.Height * RenderScale,
+                PixelFormat.Format32bppPArgb);
+
+            using (Graphics graphics = Graphics.FromImage(highResolutionBitmap))
+            {
+                graphics.Clear(Color.Transparent);
+                graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAlias;
+                graphics.ScaleTransform(RenderScale, RenderScale);
+
+                using Brush brush = new SolidBrush(ParseColor(appearance.LabelColor, Color.White));
+                graphics.DrawString(text, font, brush, PaddingX, PaddingY, StringFormat.GenericTypographic);
+            }
+
+            Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
+            using Graphics finalGraphics = Graphics.FromImage(bitmap);
+            finalGraphics.Clear(Color.Transparent);
+            finalGraphics.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+            finalGraphics.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+            finalGraphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            finalGraphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+            finalGraphics.DrawImage(
+                highResolutionBitmap,
+                new Rectangle(0, 0, overlaySize.Width, overlaySize.Height),
+                new Rectangle(0, 0, highResolutionBitmap.Width, highResolutionBitmap.Height),
+                GraphicsUnit.Pixel);
+
+            return bitmap;
         }
 
         internal void EnsureAboveOwner()
