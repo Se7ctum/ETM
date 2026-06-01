@@ -9,9 +9,8 @@ internal sealed class ConfigWindow : Form
     private readonly Profile activeProfile;
     private readonly Action saveRequested;
     private readonly Action<string> activeProfileChanged;
-    private readonly Panel contentHost = new BufferedPanel();
+    private readonly Panel contentHost = new();
     private readonly List<Button> navigationButtons = new();
-    private readonly Dictionary<Button, Control> pages = new();
 
     internal ConfigWindow(AppSettings settings, Profile activeProfile, Action saveRequested, Action<string> activeProfileChanged)
     {
@@ -37,31 +36,17 @@ internal sealed class ConfigWindow : Form
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
+        Panel sidebar = BuildSidebar();
         contentHost.Dock = DockStyle.Fill;
         contentHost.BackColor = UiTheme.Background;
         contentHost.Padding = new Padding(24);
-        contentHost.SuspendLayout();
-
-        Panel sidebar = BuildSidebar();
 
         shell.Controls.Add(sidebar, 0, 0);
         shell.Controls.Add(contentHost, 1, 0);
 
         Controls.Add(shell);
         UiTheme.Apply(this);
-        contentHost.ResumeLayout(false);
-        ShowPage(navigationButtons[0]);
-    }
-
-    protected override CreateParams CreateParams
-    {
-        get
-        {
-            const int wsExComposited = 0x02000000;
-            CreateParams createParams = base.CreateParams;
-            createParams.ExStyle |= wsExComposited;
-            return createParams;
-        }
+        ShowPage(navigationButtons[0], new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged));
     }
 
     private Panel BuildSidebar()
@@ -98,11 +83,11 @@ internal sealed class ConfigWindow : Form
             Padding = new Padding(0, 22, 0, 0)
         };
 
-        nav.Controls.Add(CreateNavButton("Profiles", new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged)));
-        nav.Controls.Add(CreateNavButton("Thumbnails", new ThumbnailsTab(activeProfile, RequestSave)));
-        nav.Controls.Add(CreateNavButton("Hotkeys", new HotkeysTab(settings, activeProfile, RequestSave)));
-        nav.Controls.Add(CreateNavButton("Appearance", new AppearanceTab(activeProfile, RequestSave)));
-        nav.Controls.Add(CreateNavButton("System", new SystemTab(settings, RequestSave)));
+        nav.Controls.Add(CreateNavButton("Profiles", () => new ProfilesTab(settings, activeProfile, RequestSave, activeProfileChanged)));
+        nav.Controls.Add(CreateNavButton("Thumbnails", () => new ThumbnailsTab(activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("Hotkeys", () => new HotkeysTab(settings, activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("Appearance", () => new AppearanceTab(activeProfile, RequestSave)));
+        nav.Controls.Add(CreateNavButton("System", () => new SystemTab(settings, RequestSave)));
 
         sidebar.Controls.Add(nav);
         sidebar.Controls.Add(subtitle);
@@ -110,7 +95,7 @@ internal sealed class ConfigWindow : Form
         return sidebar;
     }
 
-    private Button CreateNavButton(string text, Control page)
+    private Button CreateNavButton(string text, Func<Control> pageFactory)
     {
         Button button = new()
         {
@@ -127,52 +112,32 @@ internal sealed class ConfigWindow : Form
         button.FlatAppearance.BorderSize = 0;
         button.FlatAppearance.MouseOverBackColor = UiTheme.SurfaceRaised;
         button.FlatAppearance.MouseDownBackColor = UiTheme.SurfaceRaised;
-        button.Click += (_, _) => ShowPage(button);
+        button.Click += (_, _) => ShowPage(button, pageFactory());
         navigationButtons.Add(button);
-
-        page.Dock = DockStyle.Fill;
-        page.Visible = false;
-        pages.Add(button, page);
-        contentHost.Controls.Add(page);
-
         return button;
     }
 
-    private void ShowPage(Button selectedButton)
+    private void ShowPage(Button selectedButton, Control content)
     {
-        SuspendLayout();
-        contentHost.SuspendLayout();
-
         foreach (Button button in navigationButtons)
         {
             button.BackColor = ReferenceEquals(button, selectedButton) ? UiTheme.SurfaceRaised : UiTheme.Surface;
             button.ForeColor = ReferenceEquals(button, selectedButton) ? Color.White : UiTheme.MutedText;
         }
 
-        foreach (Control page in pages.Values)
+        foreach (Control control in contentHost.Controls)
         {
-            page.Visible = false;
+            control.Dispose();
         }
 
-        Control selectedPage = pages[selectedButton];
-        selectedPage.Visible = true;
-        selectedPage.BringToFront();
-
-        contentHost.ResumeLayout(false);
-        ResumeLayout(false);
+        contentHost.Controls.Clear();
+        content.Dock = DockStyle.Fill;
+        contentHost.Controls.Add(content);
+        UiTheme.Apply(contentHost);
     }
 
     private void RequestSave()
     {
         saveRequested();
-    }
-
-    private sealed class BufferedPanel : Panel
-    {
-        internal BufferedPanel()
-        {
-            DoubleBuffered = true;
-            ResizeRedraw = true;
-        }
     }
 }
