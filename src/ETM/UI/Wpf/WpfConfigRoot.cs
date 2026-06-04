@@ -36,6 +36,7 @@ internal sealed class WpfConfigRoot : UserControl
     private static readonly Brush Muted = Brush("#9ba9b7");
     private static readonly Brush Accent = Brush("#38a6ff");
     private static readonly Brush Border = Brush("#303a49");
+    private static readonly Brush SavePending = Brush("#c73535");
 
     private readonly AppSettings settings;
     private readonly Profile profile;
@@ -43,6 +44,8 @@ internal sealed class WpfConfigRoot : UserControl
     private readonly Action<string> activeProfileChanged;
     private readonly ContentControl content = new();
     private readonly List<Button> navigationButtons = new();
+    private Button? currentSaveButton;
+    private bool hasUnsavedChanges;
 
     internal WpfConfigRoot(AppSettings settings, Profile profile, Action saveRequested, Action<string> activeProfileChanged)
     {
@@ -132,6 +135,41 @@ internal sealed class WpfConfigRoot : UserControl
         }
 
         content.Content = pageFactory();
+        RefreshSaveButton();
+    }
+
+    private void MarkDirty()
+    {
+        hasUnsavedChanges = true;
+        RefreshSaveButton();
+    }
+
+    private void SaveChanges()
+    {
+        saveRequested();
+        hasUnsavedChanges = false;
+        RefreshSaveButton();
+    }
+
+    private Button CreateSaveButton()
+    {
+        Button button = ActionButton("Save", SaveChanges);
+        button.MinWidth = 108;
+        button.Height = 38;
+        currentSaveButton = button;
+        RefreshSaveButton();
+        return button;
+    }
+
+    private void RefreshSaveButton()
+    {
+        if (currentSaveButton is null)
+        {
+            return;
+        }
+
+        currentSaveButton.Background = hasUnsavedChanges ? SavePending : Panel;
+        currentSaveButton.Foreground = Text;
     }
 
     private UIElement BuildProfilesPage()
@@ -188,7 +226,7 @@ internal sealed class WpfConfigRoot : UserControl
             if (SelectedProfile(profiles) is { } selected)
             {
                 selected.AutoLoadCharacters = SplitLines(characters.Text);
-                saveRequested();
+                MarkDirty();
             }
         };
         details.Children.Add(characters);
@@ -198,7 +236,7 @@ internal sealed class WpfConfigRoot : UserControl
             if (SelectedProfile(profiles) is { } selected)
             {
                 selected.AutoLoadClientCount = value == 0 ? null : value;
-                saveRequested();
+                MarkDirty();
             }
         };
         details.Children.Add(count.Control);
@@ -210,7 +248,7 @@ internal sealed class WpfConfigRoot : UserControl
             settings.Profiles.Add(new Profile { Name = name });
             profiles.Items.Add(name);
             profiles.SelectedItem = name;
-            saveRequested();
+            MarkDirty();
         }));
         actions.Children.Add(ActionButton("Set active", () =>
         {
@@ -219,7 +257,7 @@ internal sealed class WpfConfigRoot : UserControl
                 settings.ActiveProfileName = name;
                 active.Text = $"Active profile: {settings.ActiveProfileName}";
                 activeProfileChanged(name);
-                saveRequested();
+                MarkDirty();
             }
         }));
         actions.Children.Add(ActionButton("Duplicate", () =>
@@ -233,7 +271,7 @@ internal sealed class WpfConfigRoot : UserControl
             settings.Profiles.Add(clone);
             profiles.Items.Add(clone.Name);
             profiles.SelectedItem = clone.Name;
-            saveRequested();
+            MarkDirty();
         }));
         actions.Children.Add(ActionButton("Delete", () =>
         {
@@ -251,7 +289,7 @@ internal sealed class WpfConfigRoot : UserControl
                 settings.ActiveProfileName = settings.Profiles[0].Name;
                 activeProfileChanged(settings.ActiveProfileName);
             }
-            saveRequested();
+            MarkDirty();
         }));
         actions.Children.Add(ActionButton("Export", () => ExportProfile(profiles)));
         actions.Children.Add(ActionButton("Import", () => ImportProfile(profiles)));
@@ -285,14 +323,14 @@ internal sealed class WpfConfigRoot : UserControl
 
             row.Children.Add(new TextBlock { Text = overlay.CharacterName, Foreground = Text, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold });
             TextBox hotkey = TextBox(overlay.DirectHotkey ?? string.Empty);
-            hotkey.LostFocus += (_, _) => { overlay.DirectHotkey = hotkey.Text.Trim(); saveRequested(); };
+            hotkey.LostFocus += (_, _) => { overlay.DirectHotkey = hotkey.Text.Trim(); MarkDirty(); };
             AddCell(row, hotkey, 1);
             IntegerBox opacity = new(0, 100, Math.Clamp((int)Math.Round(overlay.Opacity * 100), 0, 100));
-            opacity.Changed += value => { overlay.Opacity = value / 100f; saveRequested(); };
+            opacity.Changed += value => { overlay.Opacity = value / 100f; MarkDirty(); };
             AddCell(row, opacity.Control, 2);
-            CheckBox visible = Check("Visible", overlay.Visible, value => { overlay.Visible = value; saveRequested(); });
+            CheckBox visible = Check("Visible", overlay.Visible, value => { overlay.Visible = value; MarkDirty(); });
             AddCell(row, visible, 3);
-            CheckBox ratio = Check("Ratio", overlay.AspectRatioLocked, value => { overlay.AspectRatioLocked = value; saveRequested(); });
+            CheckBox ratio = Check("Ratio", overlay.AspectRatioLocked, value => { overlay.AspectRatioLocked = value; MarkDirty(); });
             AddCell(row, ratio, 4);
             stack.Children.Add(row);
         }
@@ -316,7 +354,7 @@ internal sealed class WpfConfigRoot : UserControl
         AttachHotkeyCapture(global, hotkey =>
         {
             settings.Global.ShowHideAllHotkey = hotkey;
-            saveRequested();
+            MarkDirty();
         });
         left.Children.Add(Label("Show / hide all"));
         left.Children.Add(global);
@@ -332,7 +370,7 @@ internal sealed class WpfConfigRoot : UserControl
             profile.HotkeyGroups.Add(group);
             groups.Items.Add(group.Name);
             groups.SelectedIndex = groups.Items.Count - 1;
-            saveRequested();
+            MarkDirty();
         }));
         left.Children.Add(ActionButton("Delete group", () =>
         {
@@ -340,7 +378,7 @@ internal sealed class WpfConfigRoot : UserControl
             {
                 profile.HotkeyGroups.RemoveAt(groups.SelectedIndex);
                 groups.Items.RemoveAt(groups.SelectedIndex);
-                saveRequested();
+                MarkDirty();
             }
         }));
         grid.Children.Add(left);
@@ -377,7 +415,7 @@ internal sealed class WpfConfigRoot : UserControl
             {
                 group.Name = groupName.Text.Trim();
                 groups.Items[groups.SelectedIndex] = string.IsNullOrWhiteSpace(group.Name) ? "(unnamed group)" : group.Name;
-                saveRequested();
+                MarkDirty();
             }
         };
         AttachHotkeyCapture(cycle, hotkey =>
@@ -385,7 +423,7 @@ internal sealed class WpfConfigRoot : UserControl
             if (SelectedGroup(groups) is { } group)
             {
                 group.CycleHotkey = hotkey;
-                saveRequested();
+                MarkDirty();
             }
         });
         characters.LostFocus += (_, _) =>
@@ -393,7 +431,7 @@ internal sealed class WpfConfigRoot : UserControl
             if (SelectedGroup(groups) is { } group)
             {
                 group.CharacterNames = SplitLines(characters.Text);
-                saveRequested();
+                MarkDirty();
             }
         };
 
@@ -414,7 +452,7 @@ internal sealed class WpfConfigRoot : UserControl
         stack.Children.Add(ColorRow("Active border color", appearance.ActiveBorderColor, value => appearance.ActiveBorderColor = value));
         stack.Children.Add(NumberRow("Border width", appearance.BorderWidth, 0, 16, value => appearance.BorderWidth = value));
         stack.Children.Add(ColorRow("Label color", appearance.LabelColor, value => appearance.LabelColor = value));
-        stack.Children.Add(Check("Show hotkey in label", appearance.ShowHotkeyInLabel, value => { appearance.ShowHotkeyInLabel = value; saveRequested(); }));
+        stack.Children.Add(Check("Show hotkey in label", appearance.ShowHotkeyInLabel, value => { appearance.ShowHotkeyInLabel = value; MarkDirty(); }));
         stack.Children.Add(ComboRow("Label font", appearance.LabelFont, ["Segoe UI Semibold", "Segoe UI", "Arial", "Calibri", "Tahoma", "Verdana", "Consolas", "Trebuchet MS", "Microsoft Sans Serif", "Georgia", "Times New Roman"], value => appearance.LabelFont = value));
         stack.Children.Add(NumberRow("Label font size", appearance.LabelFontSize, 6, 32, value => appearance.LabelFontSize = value));
         stack.Children.Add(ComboRow("Label position", appearance.LabelPosition, ["TopLeft", "TopRight", "BottomLeft", "BottomRight"], value => appearance.LabelPosition = value));
@@ -441,16 +479,16 @@ internal sealed class WpfConfigRoot : UserControl
             {
                 StartupManager.SetLaunchOnStartup(value);
                 global.LaunchOnStartup = value;
-                saveRequested();
+                MarkDirty();
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Unable to update startup setting: {ex.Message}", "ETM", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }));
-        stack.Children.Add(Check("Snap to edges", global.SnapToEdges, value => { global.SnapToEdges = value; saveRequested(); }));
+        stack.Children.Add(Check("Snap to edges", global.SnapToEdges, value => { global.SnapToEdges = value; MarkDirty(); }));
         stack.Children.Add(NumberRow("Snap threshold", global.SnapThreshold, 0, 64, value => global.SnapThreshold = value));
-        stack.Children.Add(Check("Snap to grid", global.SnapToGrid, value => { global.SnapToGrid = value; saveRequested(); }));
+        stack.Children.Add(Check("Snap to grid", global.SnapToGrid, value => { global.SnapToGrid = value; MarkDirty(); }));
         stack.Children.Add(NumberRow("Grid size", global.GridSize, 1, 200, value => global.GridSize = value));
         return Scroll(stack);
     }
@@ -460,9 +498,17 @@ internal sealed class WpfConfigRoot : UserControl
         Grid grid = new();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-        StackPanel header = new() { Margin = new Thickness(0, 0, 0, 22) };
-        header.Children.Add(new TextBlock { Text = title, Foreground = Text, FontSize = 26, FontWeight = FontWeights.SemiBold });
-        header.Children.Add(new TextBlock { Text = subtitle, Foreground = Muted, Margin = new Thickness(0, 4, 0, 0) });
+        Grid header = new() { Margin = new Thickness(0, 0, 0, 22) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        StackPanel titleStack = new();
+        titleStack.Children.Add(new TextBlock { Text = title, Foreground = Text, FontSize = 26, FontWeight = FontWeights.SemiBold });
+        titleStack.Children.Add(new TextBlock { Text = subtitle, Foreground = Muted, Margin = new Thickness(0, 4, 0, 0) });
+        header.Children.Add(titleStack);
+        Button save = CreateSaveButton();
+        save.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(save, 1);
+        header.Children.Add(save);
         grid.Children.Add(header);
         return grid;
     }
@@ -470,8 +516,18 @@ internal sealed class WpfConfigRoot : UserControl
     private StackPanel PageStack(string title, string subtitle)
     {
         StackPanel stack = new();
-        stack.Children.Add(new TextBlock { Text = title, Foreground = Text, FontSize = 26, FontWeight = FontWeights.SemiBold });
-        stack.Children.Add(new TextBlock { Text = subtitle, Foreground = Muted, Margin = new Thickness(0, 4, 0, 24) });
+        Grid header = new() { Margin = new Thickness(0, 0, 0, 24) };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        StackPanel titleStack = new();
+        titleStack.Children.Add(new TextBlock { Text = title, Foreground = Text, FontSize = 26, FontWeight = FontWeights.SemiBold });
+        titleStack.Children.Add(new TextBlock { Text = subtitle, Foreground = Muted, Margin = new Thickness(0, 4, 0, 0) });
+        header.Children.Add(titleStack);
+        Button save = CreateSaveButton();
+        save.VerticalAlignment = VerticalAlignment.Top;
+        Grid.SetColumn(save, 1);
+        header.Children.Add(save);
+        stack.Children.Add(header);
         return stack;
     }
 
@@ -552,7 +608,7 @@ internal sealed class WpfConfigRoot : UserControl
     private UIElement NumberRow(string label, int value, int min, int max, Action<int> setter)
     {
         IntegerBox box = new(min, max, value);
-        box.Changed += next => { setter(next); saveRequested(); };
+        box.Changed += next => { setter(next); MarkDirty(); };
         return Row(label, box.Control);
     }
 
@@ -562,7 +618,7 @@ internal sealed class WpfConfigRoot : UserControl
         combo.SelectionChanged += (_, _) =>
         {
             setter(combo.SelectedItem?.ToString() ?? options[0]);
-            saveRequested();
+            MarkDirty();
         };
         return Row(label, combo);
     }
@@ -587,7 +643,7 @@ internal sealed class WpfConfigRoot : UserControl
                 string color = System.Drawing.ColorTranslator.ToHtml(dialog.Color);
                 button!.Content = color;
                 setter(color);
-                saveRequested();
+                MarkDirty();
             }
         });
         return Row(label, button);
@@ -666,7 +722,7 @@ internal sealed class WpfConfigRoot : UserControl
             settings.Profiles.Add(imported);
             profiles.Items.Add(imported.Name);
             profiles.SelectedItem = imported.Name;
-            saveRequested();
+            MarkDirty();
         }
         catch (Exception ex)
         {

@@ -8,6 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ApplicationManifest>App.manifest</ApplicationManifest>
+    <ApplicationIcon>Resources\tray_icon.ico</ApplicationIcon>
     <AssemblyName>ETM</AssemblyName>
     <RootNamespace>ETM</RootNamespace>
   </PropertyGroup>
