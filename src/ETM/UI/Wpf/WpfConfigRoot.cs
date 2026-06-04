@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Brush = System.Windows.Media.Brush;
 using Button = System.Windows.Controls.Button;
 using CheckBox = System.Windows.Controls.CheckBox;
@@ -46,6 +47,7 @@ internal sealed class WpfConfigRoot : UserControl
     private readonly List<Button> navigationButtons = new();
     private Button? currentSaveButton;
     private bool hasUnsavedChanges;
+    private Action? flushCurrentPage;
 
     internal WpfConfigRoot(AppSettings settings, Profile profile, Action saveRequested, Action<string> activeProfileChanged)
     {
@@ -134,6 +136,7 @@ internal sealed class WpfConfigRoot : UserControl
             button.Foreground = selected ? Text : Muted;
         }
 
+        flushCurrentPage = null;
         content.Content = pageFactory();
         RefreshSaveButton();
     }
@@ -146,9 +149,10 @@ internal sealed class WpfConfigRoot : UserControl
 
     private void SaveChanges()
     {
+        flushCurrentPage?.Invoke();
         saveRequested();
         hasUnsavedChanges = false;
-        RefreshSaveButton();
+        ShowSaveFeedback();
     }
 
     private Button CreateSaveButton()
@@ -170,6 +174,28 @@ internal sealed class WpfConfigRoot : UserControl
 
         currentSaveButton.Background = hasUnsavedChanges ? SavePending : Panel;
         currentSaveButton.Foreground = Text;
+    }
+
+    private void ShowSaveFeedback()
+    {
+        if (currentSaveButton is null)
+        {
+            return;
+        }
+
+        currentSaveButton.Content = "Saved";
+        currentSaveButton.Background = Accent;
+        DispatcherTimer timer = new() { Interval = TimeSpan.FromMilliseconds(650) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            if (currentSaveButton is not null)
+            {
+                currentSaveButton.Content = "Save";
+                RefreshSaveButton();
+            }
+        };
+        timer.Start();
     }
 
     private UIElement BuildProfilesPage()
@@ -212,18 +238,25 @@ internal sealed class WpfConfigRoot : UserControl
             count.Value = selected?.AutoLoadClientCount ?? 0;
         }
 
-        profiles.SelectionChanged += (_, _) => LoadSelected();
-        LoadSelected();
-
         details.Children.Add(Help("Profile activation rules", "If these characters are active, ETM switches to this profile. Add one character per line. Client count is optional."));
         details.Children.Add(Label("If these characters are active"));
         characters.Height = 150;
         characters.AcceptsReturn = true;
         characters.TextWrapping = TextWrapping.NoWrap;
         characters.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-        characters.LostFocus += (_, _) =>
+        bool loadingProfile = false;
+        profiles.SelectionChanged += (_, _) =>
         {
-            if (SelectedProfile(profiles) is { } selected)
+            loadingProfile = true;
+            LoadSelected();
+            loadingProfile = false;
+        };
+        loadingProfile = true;
+        LoadSelected();
+        loadingProfile = false;
+        characters.TextChanged += (_, _) =>
+        {
+            if (!loadingProfile && SelectedProfile(profiles) is { } selected)
             {
                 selected.AutoLoadCharacters = SplitLines(characters.Text);
                 MarkDirty();
@@ -233,7 +266,7 @@ internal sealed class WpfConfigRoot : UserControl
         details.Children.Add(Label("Also require client count"));
         count.Changed += value =>
         {
-            if (SelectedProfile(profiles) is { } selected)
+            if (!loadingProfile && SelectedProfile(profiles) is { } selected)
             {
                 selected.AutoLoadClientCount = value == 0 ? null : value;
                 MarkDirty();
@@ -307,6 +340,15 @@ internal sealed class WpfConfigRoot : UserControl
         Grid.SetRow(scroll, 1);
         page.Children.Add(scroll);
 
+        Grid header = ThumbnailGrid();
+        header.Margin = new Thickness(0, 0, 0, 6);
+        header.Children.Add(HeaderCell("Character", 0));
+        header.Children.Add(HeaderCell("Direct hotkey", 1));
+        header.Children.Add(HeaderCell("Opacity %", 2));
+        header.Children.Add(HeaderCell("Visible", 3));
+        header.Children.Add(HeaderCell("Lock ratio", 4));
+        stack.Children.Add(header);
+
         foreach (OverlayState overlay in profile.Overlays.OrderBy(overlay => overlay.CharacterName))
         {
             if (overlay.CharacterName.Equals("EVE Launcher", StringComparison.OrdinalIgnoreCase))
@@ -315,15 +357,17 @@ internal sealed class WpfConfigRoot : UserControl
             }
 
             Grid row = CardGrid();
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
-
-            row.Children.Add(new TextBlock { Text = overlay.CharacterName, Foreground = Text, VerticalAlignment = VerticalAlignment.Center, FontWeight = FontWeights.SemiBold });
+            TextBlock characterName = new()
+            {
+                Text = overlay.CharacterName,
+                Foreground = Text,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(12, 0, 8, 0)
+            };
+            row.Children.Add(characterName);
             TextBox hotkey = TextBox(overlay.DirectHotkey ?? string.Empty);
-            hotkey.LostFocus += (_, _) => { overlay.DirectHotkey = hotkey.Text.Trim(); MarkDirty(); };
+            hotkey.TextChanged += (_, _) => { overlay.DirectHotkey = hotkey.Text.Trim(); MarkDirty(); };
             AddCell(row, hotkey, 1);
             IntegerBox opacity = new(0, 100, Math.Clamp((int)Math.Round(overlay.Opacity * 100), 0, 100));
             opacity.Changed += value => { overlay.Opacity = value / 100f; MarkDirty(); };
@@ -393,13 +437,16 @@ internal sealed class WpfConfigRoot : UserControl
         characters.AcceptsReturn = true;
         characters.Height = 190;
         characters.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+        bool loadingGroup = false;
 
         void LoadGroup()
         {
+            loadingGroup = true;
             HotkeyGroup? selected = SelectedGroup(groups);
             groupName.Text = selected?.Name ?? string.Empty;
             cycle.Text = selected?.CycleHotkey ?? string.Empty;
             characters.Text = selected is null ? string.Empty : string.Join(Environment.NewLine, selected.CharacterNames);
+            loadingGroup = false;
         }
 
         groups.SelectionChanged += (_, _) => LoadGroup();
@@ -409,9 +456,9 @@ internal sealed class WpfConfigRoot : UserControl
         }
         LoadGroup();
 
-        groupName.LostFocus += (_, _) =>
+        groupName.TextChanged += (_, _) =>
         {
-            if (SelectedGroup(groups) is { } group)
+            if (!loadingGroup && SelectedGroup(groups) is { } group)
             {
                 group.Name = groupName.Text.Trim();
                 groups.Items[groups.SelectedIndex] = string.IsNullOrWhiteSpace(group.Name) ? "(unnamed group)" : group.Name;
@@ -426,9 +473,9 @@ internal sealed class WpfConfigRoot : UserControl
                 MarkDirty();
             }
         });
-        characters.LostFocus += (_, _) =>
+        characters.TextChanged += (_, _) =>
         {
-            if (SelectedGroup(groups) is { } group)
+            if (!loadingGroup && SelectedGroup(groups) is { } group)
             {
                 group.CharacterNames = SplitLines(characters.Text);
                 MarkDirty();
@@ -447,7 +494,8 @@ internal sealed class WpfConfigRoot : UserControl
     private UIElement BuildAppearancePage()
     {
         AppearanceDefaults appearance = profile.Appearance;
-        StackPanel stack = PageStack("Appearance", "Keep the overlay clean and tune label readability.");
+        Grid page = Page("Appearance", "Keep the overlay clean and tune label readability.");
+        StackPanel stack = new();
         stack.Children.Add(ColorRow("Border color", appearance.BorderColor, value => appearance.BorderColor = value));
         stack.Children.Add(ColorRow("Active border color", appearance.ActiveBorderColor, value => appearance.ActiveBorderColor = value));
         stack.Children.Add(NumberRow("Border width", appearance.BorderWidth, 0, 16, value => appearance.BorderWidth = value));
@@ -456,13 +504,17 @@ internal sealed class WpfConfigRoot : UserControl
         stack.Children.Add(ComboRow("Label font", appearance.LabelFont, ["Segoe UI Semibold", "Segoe UI", "Arial", "Calibri", "Tahoma", "Verdana", "Consolas", "Trebuchet MS", "Microsoft Sans Serif", "Georgia", "Times New Roman"], value => appearance.LabelFont = value));
         stack.Children.Add(NumberRow("Label font size", appearance.LabelFontSize, 6, 32, value => appearance.LabelFontSize = value));
         stack.Children.Add(ComboRow("Label position", appearance.LabelPosition, ["TopLeft", "TopRight", "BottomLeft", "BottomRight"], value => appearance.LabelPosition = value));
-        return Scroll(stack);
+        ScrollViewer scroll = Scroll(stack);
+        Grid.SetRow(scroll, 1);
+        page.Children.Add(scroll);
+        return page;
     }
 
     private UIElement BuildSystemPage()
     {
         GlobalSettings global = settings.Global;
-        StackPanel stack = PageStack("System", "Startup and snapping behavior.");
+        Grid page = Page("System", "Startup and snapping behavior.");
+        StackPanel stack = new();
         bool startupEnabled = global.LaunchOnStartup;
         try
         {
@@ -490,7 +542,10 @@ internal sealed class WpfConfigRoot : UserControl
         stack.Children.Add(NumberRow("Snap threshold", global.SnapThreshold, 0, 64, value => global.SnapThreshold = value));
         stack.Children.Add(Check("Snap to grid", global.SnapToGrid, value => { global.SnapToGrid = value; MarkDirty(); }));
         stack.Children.Add(NumberRow("Grid size", global.GridSize, 1, 200, value => global.GridSize = value));
-        return Scroll(stack);
+        ScrollViewer scroll = Scroll(stack);
+        Grid.SetRow(scroll, 1);
+        page.Children.Add(scroll);
+        return page;
     }
 
     private Grid Page(string title, string subtitle)
@@ -509,26 +564,9 @@ internal sealed class WpfConfigRoot : UserControl
         save.VerticalAlignment = VerticalAlignment.Top;
         Grid.SetColumn(save, 1);
         header.Children.Add(save);
+        Grid.SetColumnSpan(header, 20);
         grid.Children.Add(header);
         return grid;
-    }
-
-    private StackPanel PageStack(string title, string subtitle)
-    {
-        StackPanel stack = new();
-        Grid header = new() { Margin = new Thickness(0, 0, 0, 24) };
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        StackPanel titleStack = new();
-        titleStack.Children.Add(new TextBlock { Text = title, Foreground = Text, FontSize = 26, FontWeight = FontWeights.SemiBold });
-        titleStack.Children.Add(new TextBlock { Text = subtitle, Foreground = Muted, Margin = new Thickness(0, 4, 0, 0) });
-        header.Children.Add(titleStack);
-        Button save = CreateSaveButton();
-        save.VerticalAlignment = VerticalAlignment.Top;
-        Grid.SetColumn(save, 1);
-        header.Children.Add(save);
-        stack.Children.Add(header);
-        return stack;
     }
 
     private static ScrollViewer Scroll(UIElement child) => new() { Content = child, VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
@@ -576,13 +614,39 @@ internal sealed class WpfConfigRoot : UserControl
 
     private static Grid CardGrid()
     {
-        Grid grid = new()
-        {
-            Background = PanelSoft,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
+        Grid grid = ThumbnailGrid();
+        grid.Background = PanelSoft;
+        grid.Margin = new Thickness(0, 0, 0, 8);
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(46) });
         return grid;
+    }
+
+    private static Grid ThumbnailGrid()
+    {
+        Grid grid = new()
+        {
+            Margin = new Thickness(0)
+        };
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(115) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(95) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(105) });
+        return grid;
+    }
+
+    private static TextBlock HeaderCell(string text, int column)
+    {
+        TextBlock block = new()
+        {
+            Text = text,
+            Foreground = Muted,
+            FontSize = 12,
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(column == 0 ? 12 : 6, 0, 6, 0)
+        };
+        Grid.SetColumn(block, column);
+        return block;
     }
 
     private static void AddCell(Grid grid, UIElement element, int column)
@@ -614,7 +678,19 @@ internal sealed class WpfConfigRoot : UserControl
 
     private UIElement ComboRow(string label, string value, string[] options, Action<string> setter)
     {
-        ComboBox combo = new() { ItemsSource = options, SelectedItem = options.Contains(value) ? value : options[0], Width = 220, Background = PanelSoft, Foreground = Text };
+        ComboBox combo = new()
+        {
+            ItemsSource = options,
+            SelectedItem = options.Contains(value) ? value : options[0],
+            Width = 220,
+            Background = PanelSoft,
+            Foreground = Text,
+            BorderBrush = Border
+        };
+        combo.Resources[System.Windows.SystemColors.WindowBrushKey] = PanelSoft;
+        combo.Resources[System.Windows.SystemColors.ControlBrushKey] = PanelSoft;
+        combo.Resources[System.Windows.SystemColors.HighlightBrushKey] = Accent;
+        combo.Resources[System.Windows.SystemColors.HighlightTextBrushKey] = Text;
         combo.SelectionChanged += (_, _) =>
         {
             setter(combo.SelectedItem?.ToString() ?? options[0]);
@@ -625,13 +701,14 @@ internal sealed class WpfConfigRoot : UserControl
 
     private UIElement ColorRow(string label, string value, Action<string> setter)
     {
+        string currentColor = value;
         Button? button = null;
         button = ActionButton(value, () =>
         {
             using WinForms.ColorDialog dialog = new() { FullOpen = true };
             try
             {
-                dialog.Color = System.Drawing.ColorTranslator.FromHtml(value);
+                dialog.Color = System.Drawing.ColorTranslator.FromHtml(currentColor);
             }
             catch
             {
@@ -641,12 +718,33 @@ internal sealed class WpfConfigRoot : UserControl
             if (dialog.ShowDialog() == WinForms.DialogResult.OK)
             {
                 string color = System.Drawing.ColorTranslator.ToHtml(dialog.Color);
+                currentColor = color;
                 button!.Content = color;
+                button.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(color));
+                button.Foreground = GetReadableBrush(dialog.Color);
                 setter(color);
                 MarkDirty();
             }
         });
+        try
+        {
+            System.Drawing.Color parsed = System.Drawing.ColorTranslator.FromHtml(value);
+            button.Background = new SolidColorBrush((Color)ColorConverter.ConvertFromString(value));
+            button.Foreground = GetReadableBrush(parsed);
+        }
+        catch
+        {
+            button.Background = Panel;
+            button.Foreground = Text;
+        }
+
         return Row(label, button);
+    }
+
+    private static Brush GetReadableBrush(System.Drawing.Color color)
+    {
+        double brightness = (color.R * 0.299) + (color.G * 0.587) + (color.B * 0.114);
+        return brightness > 150 ? WpfBrushes.Black : WpfBrushes.White;
     }
 
     private static UIElement Row(string label, UIElement control)
@@ -837,6 +935,13 @@ internal sealed class WpfConfigRoot : UserControl
             this.max = max;
             box = TextBox(Math.Clamp(value, min, max).ToString());
             box.Width = 86;
+            box.TextChanged += (_, _) =>
+            {
+                if (int.TryParse(box.Text, out int value) && value >= this.min && value <= this.max)
+                {
+                    Changed?.Invoke(value);
+                }
+            };
             box.LostFocus += (_, _) => Normalize();
         }
 

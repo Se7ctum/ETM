@@ -826,7 +826,7 @@ internal sealed class ThumbnailOverlay : Form
     private sealed class TextOverlay : Form
     {
         private const int PaddingX = 8;
-        private const int PaddingY = 4;
+        private const int PaddingY = 8;
         private readonly ThumbnailOverlay owner;
 
         internal TextOverlay(ThumbnailOverlay owner)

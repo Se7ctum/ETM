@@ -15,5 +15,5 @@ internal sealed class GlobalSettings
     public bool SnapToEdges { get; set; } = true;
     public int SnapThreshold { get; set; } = 12;
     public bool SnapToGrid { get; set; } = true;
-    public int GridSize { get; set; } = 20;
+    public int GridSize { get; set; } = 10;
 }
