@@ -34,10 +34,9 @@ internal static class WindowEnumerator
             }
 
             string characterName = ExtractCharacterName(title);
-            if (string.IsNullOrWhiteSpace(characterName)
-                && string.Equals(processName, EveClientProcessName, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(characterName))
             {
-                characterName = string.IsNullOrWhiteSpace(title) ? $"EVE Client {windows.Count + 1}" : title;
+                return true;
             }
 
             windows.Add(new EveWindow(hwnd, title, characterName));

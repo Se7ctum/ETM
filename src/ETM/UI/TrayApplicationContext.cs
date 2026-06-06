@@ -1,4 +1,5 @@
-﻿using System.IO;
+using System.IO;
+using Microsoft.Win32;
 using ETM.Core;
 using ETM.Persistence;
 
@@ -63,7 +64,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         saveDebounceTimer.Tick += (_, _) =>
         {
             saveDebounceTimer.Stop();
-            SavePositions();
+            SavePositionsSafely();
         };
 
         refreshTimer = new System.Windows.Forms.Timer
@@ -74,6 +75,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         refreshTimer.Start();
 
         RefreshThumbnails();
+        SystemEvents.SessionEnding += SystemEventsSessionEnding;
+        Application.ApplicationExit += ApplicationApplicationExit;
         QueueSetupWizardIfNeeded();
     }
 
@@ -224,8 +227,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             {
                 if (overlays.TryGetValue(eveWindow.Handle, out ThumbnailOverlay? existingOverlay))
                 {
-                    existingOverlay.UpdateEveWindow(eveWindow);
+                    bool identityChanged = existingOverlay.UpdateEveWindow(eveWindow);
                     OverlayState? state = FindOverlayState(eveWindow.CharacterName);
+                    if (identityChanged && state is not null)
+                    {
+                        existingOverlay.Bounds = RestoreBounds(state);
+                    }
+
                     existingOverlay.ApplySettings(state, activeProfile.Appearance);
                     existingOverlay.SetLabelHotkey(GetLabelHotkey(eveWindow.CharacterName, state));
                     existingOverlay.Visible = overlaysVisible && (state?.Visible ?? true);
@@ -572,6 +580,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
         CaptureSavedOverlayBoundsSnapshot();
     }
 
+    private void SavePositionsSafely()
+    {
+        try
+        {
+            SavePositions();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"ETM: Failed to save thumbnail positions: {ex}");
+        }
+    }
+
     private void CaptureSavedOverlayBoundsSnapshot()
     {
         savedOverlayBounds.Clear();
@@ -893,13 +913,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
         isShuttingDown = true;
         refreshTimer.Stop();
         saveDebounceTimer.Stop();
-        SavePositions();
+        SavePositionsSafely();
         hotkeyManager.Dispose();
         hotkeyWindow.DestroyHandle();
         foregroundWatcher.Dispose();
         DisposeOverlays();
         trayIcon.Visible = false;
         ExitThread();
+    }
+
+    private void SystemEventsSessionEnding(object sender, SessionEndingEventArgs e)
+    {
+        isShuttingDown = true;
+        saveDebounceTimer.Stop();
+        SavePositionsSafely();
+    }
+
+    private void ApplicationApplicationExit(object? sender, EventArgs e)
+    {
+        isShuttingDown = true;
+        saveDebounceTimer.Stop();
+        SavePositionsSafely();
     }
 
     private void DisposeOverlays()
@@ -921,9 +955,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (disposing)
         {
             isShuttingDown = true;
+            SystemEvents.SessionEnding -= SystemEventsSessionEnding;
+            Application.ApplicationExit -= ApplicationApplicationExit;
             refreshTimer.Dispose();
             saveDebounceTimer.Dispose();
-            SavePositions();
+            SavePositionsSafely();
             hotkeyManager.Dispose();
             hotkeyWindow.DestroyHandle();
             foregroundWatcher.Dispose();

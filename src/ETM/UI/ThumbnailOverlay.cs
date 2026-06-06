@@ -235,24 +235,29 @@ internal sealed class ThumbnailOverlay : Form
         Invalidate();
     }
 
-    internal void UpdateEveWindow(EveWindow updatedWindow)
+    internal bool UpdateEveWindow(EveWindow updatedWindow)
     {
         if (eveWindow.Handle != updatedWindow.Handle)
         {
-            return;
+            return false;
         }
 
         if (string.Equals(eveWindow.Title, updatedWindow.Title, StringComparison.Ordinal)
             && string.Equals(eveWindow.CharacterName, updatedWindow.CharacterName, StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
+        bool characterChanged = !string.Equals(eveWindow.CharacterName, updatedWindow.CharacterName, StringComparison.Ordinal);
         eveWindow = updatedWindow;
-        customLabel = string.Empty;
+        if (characterChanged)
+        {
+            customLabel = string.Empty;
+        }
+
         UpdateTextOverlay();
         Invalidate();
-        OnOverlayStateChanged();
+        return characterChanged;
     }
 
     internal void SetThumbnailSize(Size size)
