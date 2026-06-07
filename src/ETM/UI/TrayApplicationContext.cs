@@ -218,8 +218,15 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             foreach (IntPtr handle in overlays.Keys.Where(handle => !detectedHandles.Contains(handle)).ToList())
             {
-                overlays[handle].OverlayStateChanged -= OverlayStateChanged;
-                overlays[handle].Dispose();
+                ThumbnailOverlay overlay = overlays[handle];
+                if (NativeMethods.IsWindow(overlay.SourceHandle))
+                {
+                    overlay.EnsureAlwaysOnTop();
+                    continue;
+                }
+
+                overlay.OverlayStateChanged -= OverlayStateChanged;
+                overlay.Dispose();
                 overlays.Remove(handle);
             }
 
