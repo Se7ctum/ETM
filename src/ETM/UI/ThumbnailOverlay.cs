@@ -1,5 +1,7 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Drawing.Text;
 using ETM.Core;
 using ETM.Persistence;
 
@@ -861,7 +863,7 @@ internal sealed class ThumbnailOverlay : Form
         internal void UpdateText(string text, AppearanceDefaults appearance)
         {
             using Font font = CreateFont(appearance);
-            Size measured = TextRenderer.MeasureText(text, font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
+            Size measured = MeasureText(text, font);
             Size overlaySize = new(
                 Math.Max(1, measured.Width + PaddingX * 2),
                 Math.Max(1, measured.Height + PaddingY * 2));
@@ -880,31 +882,32 @@ internal sealed class ThumbnailOverlay : Form
 
         private static Bitmap RenderTextBitmap(string text, Font font, AppearanceDefaults appearance, Size overlaySize)
         {
-            using Bitmap mask = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
-            using Graphics maskGraphics = Graphics.FromImage(mask);
-            maskGraphics.Clear(Color.Black);
-            TextRenderer.DrawText(
-                maskGraphics,
-                text,
-                font,
-                new Point(PaddingX, PaddingY),
-                Color.White,
-                Color.Black,
-                TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
-
             Color labelColor = ParseColor(appearance.LabelColor, Color.White);
             Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
-            for (int y = 0; y < overlaySize.Height; y++)
-            {
-                for (int x = 0; x < overlaySize.Width; x++)
-                {
-                    Color maskPixel = mask.GetPixel(x, y);
-                    int alpha = Math.Max(maskPixel.R, Math.Max(maskPixel.G, maskPixel.B));
-                    bitmap.SetPixel(x, y, Color.FromArgb(alpha, labelColor));
-                }
-            }
+            using Graphics graphics = Graphics.FromImage(bitmap);
+            using Brush brush = new SolidBrush(labelColor);
+            using StringFormat format = CreateTextFormat();
+            graphics.Clear(Color.Transparent);
+            graphics.CompositingMode = CompositingMode.SourceOver;
+            graphics.CompositingQuality = CompositingQuality.HighQuality;
+            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            graphics.SmoothingMode = SmoothingMode.HighQuality;
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            graphics.DrawString(text, font, brush, new PointF(PaddingX, PaddingY), format);
 
             return bitmap;
+        }
+
+        private static Size MeasureText(string text, Font font)
+        {
+            using Bitmap bitmap = new(1, 1, PixelFormat.Format32bppPArgb);
+            using Graphics graphics = Graphics.FromImage(bitmap);
+            using StringFormat format = CreateTextFormat();
+            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            SizeF measured = graphics.MeasureString(text, font, int.MaxValue, format);
+            return new Size(
+                Math.Max(1, (int)Math.Ceiling(measured.Width)),
+                Math.Max(1, (int)Math.Ceiling(measured.Height)));
         }
 
         internal void EnsureAboveOwner()
@@ -979,9 +982,18 @@ internal sealed class ThumbnailOverlay : Form
 
         private static Font CreateFont(AppearanceDefaults appearance)
         {
-            string fontName = string.IsNullOrWhiteSpace(appearance.LabelFont) ? "Segoe UI" : appearance.LabelFont;
+            string fontName = string.IsNullOrWhiteSpace(appearance.LabelFont) ? "Segoe UI Semibold" : appearance.LabelFont;
             float fontSize = Math.Clamp(appearance.LabelFontSize, 6, 32);
             return new Font(fontName, fontSize, FontStyle.Regular, GraphicsUnit.Point);
+        }
+
+        private static StringFormat CreateTextFormat()
+        {
+            return new StringFormat(StringFormat.GenericTypographic)
+            {
+                FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces,
+                Trimming = StringTrimming.None
+            };
         }
     }
 }
