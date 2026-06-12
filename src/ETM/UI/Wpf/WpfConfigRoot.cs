@@ -673,6 +673,7 @@ internal sealed class WpfConfigRoot : UserControl
     {
         IntegerBox box = new(min, max, value);
         box.Changed += next => { setter(next); MarkDirty(); };
+        flushCurrentPage += () => setter(box.Value);
         return Row(label, box.Control);
     }
 

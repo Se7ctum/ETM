@@ -931,12 +931,13 @@ internal sealed class ThumbnailOverlay : Form
             EnsureAboveOwner();
         }
 
-        private static Bitmap RenderTextBitmap(string text, Font font, AppearanceDefaults appearance, Size overlaySize)
+        private Bitmap RenderTextBitmap(string text, Font font, AppearanceDefaults appearance, Size overlaySize)
         {
             Color labelColor = ParseColor(appearance.LabelColor, Color.White);
             Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
             using Graphics graphics = Graphics.FromImage(bitmap);
             graphics.Clear(Color.FromArgb(225, 0, 0, 0));
+            DrawBorder(graphics, appearance, overlaySize);
             graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             Rectangle textBounds = new(PaddingX, 0, Math.Max(1, overlaySize.Width - PaddingX * 2), overlaySize.Height);
             TextRenderer.DrawText(
@@ -948,6 +949,21 @@ internal sealed class ThumbnailOverlay : Form
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
 
             return bitmap;
+        }
+
+        private void DrawBorder(Graphics graphics, AppearanceDefaults appearance, Size overlaySize)
+        {
+            int borderWidth = Math.Max(0, appearance.BorderWidth);
+            if (borderWidth <= 0)
+            {
+                return;
+            }
+
+            Color borderColor = ParseColor(owner.isActiveClient ? appearance.ActiveBorderColor : appearance.BorderColor, owner.isActiveClient ? Color.DeepSkyBlue : Color.DimGray);
+            using Pen borderPen = new(borderColor, borderWidth);
+            int inset = borderWidth / 2;
+            Rectangle border = new(inset, inset, Math.Max(1, overlaySize.Width - borderWidth), Math.Max(1, overlaySize.Height - borderWidth));
+            graphics.DrawRectangle(borderPen, border);
         }
 
         private static Size MeasureText(string text, Font font)
