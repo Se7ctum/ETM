@@ -260,10 +260,18 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void UpdateActiveOverlay(IntPtr foregroundHwnd)
     {
+        ThumbnailOverlay? activeOverlay = null;
         foreach (ThumbnailOverlay overlay in overlays.Values)
         {
-            overlay.IsActiveClient = overlay.SourceHandle == foregroundHwnd;
+            bool active = overlay.SourceHandle == foregroundHwnd;
+            overlay.IsActiveClient = active;
+            if (active)
+            {
+                activeOverlay = overlay;
+            }
         }
+
+        activeOverlay?.EnsureAlwaysOnTop();
     }
 
     private void SetActiveOverlayImmediately(ThumbnailOverlay activeOverlay)
@@ -272,6 +280,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             overlay.SetActiveImmediate(ReferenceEquals(overlay, activeOverlay));
         }
+
+        activeOverlay.EnsureAlwaysOnTop();
     }
 
     private void ReloadThumbnails()

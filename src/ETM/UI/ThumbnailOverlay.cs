@@ -57,6 +57,11 @@ internal sealed class ThumbnailOverlay : Form
             }
 
             isActiveClient = value;
+            if (isActiveClient)
+            {
+                EnsureAlwaysOnTop();
+            }
+
             UpdateTextOverlay();
             Invalidate();
         }
@@ -480,8 +485,6 @@ internal sealed class ThumbnailOverlay : Form
         menu.Items.Add(hotkeyGroupsMenu);
 
         menu.Items.Add(new ToolStripSeparator());
-        menu.Items.Add("Bring to front", null, (_, _) => EnsureAlwaysOnTop());
-        menu.Items.Add("Send to back", null, (_, _) => SendBehindOtherThumbnails());
         menu.Items.Add("Reset size", null, (_, _) => ResetSize());
 
         ToolStripMenuItem opacityMenu = new("Opacity");
@@ -962,8 +965,11 @@ internal sealed class ThumbnailOverlay : Form
             Color borderColor = ParseColor(owner.isActiveClient ? appearance.ActiveBorderColor : appearance.BorderColor, owner.isActiveClient ? Color.DeepSkyBlue : Color.DimGray);
             using Pen borderPen = new(borderColor, borderWidth);
             int inset = borderWidth / 2;
-            Rectangle border = new(inset, inset, Math.Max(1, overlaySize.Width - borderWidth), Math.Max(1, overlaySize.Height - borderWidth));
-            graphics.DrawRectangle(borderPen, border);
+            int right = Math.Max(inset, overlaySize.Width - inset - 1);
+            int bottom = Math.Max(inset, overlaySize.Height - inset - 1);
+            graphics.DrawLine(borderPen, inset, inset, right, inset);
+            graphics.DrawLine(borderPen, inset, inset, inset, bottom);
+            graphics.DrawLine(borderPen, right, inset, right, bottom);
         }
 
         private static Size MeasureText(string text, Font font)
