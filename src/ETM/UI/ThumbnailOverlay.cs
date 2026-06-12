@@ -34,6 +34,7 @@ internal sealed class ThumbnailOverlay : Form
     private Rectangle dragStartBounds;
     private bool hasDragged;
     private bool isActiveClient;
+    private IReadOnlyList<HotkeyGroupMenuItem> hotkeyGroupMenuItems = Array.Empty<HotkeyGroupMenuItem>();
 
     internal IntPtr SourceHandle => eveWindow.Handle;
 
@@ -41,6 +42,7 @@ internal sealed class ThumbnailOverlay : Form
     internal event EventHandler? SourceFocusRequested;
     internal event EventHandler? ResetSizeRequested;
     internal event EventHandler<ThumbnailResizeEventArgs>? ResizeAllRequested;
+    internal event EventHandler<HotkeyGroupAssignmentEventArgs>? HotkeyGroupAssignmentChanged;
 
     internal bool ThumbnailsLocked { get; set; }
 
@@ -153,6 +155,19 @@ internal sealed class ThumbnailOverlay : Form
         internal Size Size { get; } = size;
     }
 
+    internal sealed class HotkeyGroupMenuItem(string name, string hotkey, bool assigned)
+    {
+        internal string Name { get; } = name;
+        internal string Hotkey { get; } = hotkey;
+        internal bool Assigned { get; } = assigned;
+    }
+
+    internal sealed class HotkeyGroupAssignmentEventArgs(string groupName, bool assigned) : EventArgs
+    {
+        internal string GroupName { get; } = groupName;
+        internal bool Assigned { get; } = assigned;
+    }
+
     internal ThumbnailOverlay(
         EveWindow eveWindow,
         GlobalSettings snapSettings,
@@ -211,7 +226,11 @@ internal sealed class ThumbnailOverlay : Form
             0,
             NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
 
-        textOverlay?.EnsureAboveOwner();
+    }
+
+    internal void SetHotkeyGroups(IReadOnlyList<HotkeyGroupMenuItem> groups)
+    {
+        hotkeyGroupMenuItems = groups;
     }
 
     internal void ApplySettings(OverlayState? state, AppearanceDefaults appearanceDefaults)
@@ -456,6 +475,9 @@ internal sealed class ThumbnailOverlay : Form
         menu.Closed += (_, _) => isMenuOpen = false;
         menu.Items.Add("Hide this thumbnail", null, (_, _) => HideThumbnail());
         menu.Items.Add("Rename...", null, (_, _) => RenameThumbnail());
+        ToolStripMenuItem hotkeyGroupsMenu = new("Hotkey groups");
+        hotkeyGroupsMenu.DropDownOpening += (_, _) => PopulateHotkeyGroupsMenu(hotkeyGroupsMenu);
+        menu.Items.Add(hotkeyGroupsMenu);
 
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Bring to front", null, (_, _) => EnsureAlwaysOnTop());
@@ -471,6 +493,36 @@ internal sealed class ThumbnailOverlay : Form
 
         menu.Items.Add(new ToolStripSeparator());
         return menu;
+    }
+
+    private void PopulateHotkeyGroupsMenu(ToolStripMenuItem menu)
+    {
+        menu.DropDownItems.Clear();
+        if (string.IsNullOrWhiteSpace(CharacterName))
+        {
+            ToolStripMenuItem item = new("Log in character first") { Enabled = false };
+            menu.DropDownItems.Add(item);
+            return;
+        }
+
+        if (hotkeyGroupMenuItems.Count == 0)
+        {
+            ToolStripMenuItem item = new("No hotkey groups") { Enabled = false };
+            menu.DropDownItems.Add(item);
+            return;
+        }
+
+        foreach (HotkeyGroupMenuItem group in hotkeyGroupMenuItems)
+        {
+            string suffix = string.IsNullOrWhiteSpace(group.Hotkey) ? string.Empty : $" ({FormatHotkeyForLabel(group.Hotkey)})";
+            ToolStripMenuItem item = new($"{group.Name}{suffix}")
+            {
+                CheckOnClick = true,
+                Checked = group.Assigned
+            };
+            item.Click += (_, _) => HotkeyGroupAssignmentChanged?.Invoke(this, new HotkeyGroupAssignmentEventArgs(group.Name, item.Checked));
+            menu.DropDownItems.Add(item);
+        }
     }
 
     private static Color ParseColor(string? value, Color fallback)
@@ -841,7 +893,7 @@ internal sealed class ThumbnailOverlay : Form
             this.owner = owner;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
-            TopMost = true;
+            TopMost = false;
             StartPosition = FormStartPosition.Manual;
         }
 
@@ -864,10 +916,9 @@ internal sealed class ThumbnailOverlay : Form
         {
             using Font font = CreateFont(appearance);
             Size measured = MeasureText(text, font);
-            Size overlaySize = new(
-                Math.Max(1, measured.Width + PaddingX * 2),
-                Math.Max(1, measured.Height + PaddingY * 2));
-            Point location = GetLocation(overlaySize, appearance);
+            int barHeight = Math.Max(LabelBandHeight, measured.Height + PaddingY * 2);
+            Size overlaySize = new(Math.Max(1, owner.Width), barHeight);
+            Point location = new(owner.Left, owner.Top);
 
             using Bitmap bitmap = RenderTextBitmap(text, font, appearance, overlaySize);
 
@@ -885,15 +936,16 @@ internal sealed class ThumbnailOverlay : Form
             Color labelColor = ParseColor(appearance.LabelColor, Color.White);
             Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
             using Graphics graphics = Graphics.FromImage(bitmap);
-            using Brush brush = new SolidBrush(labelColor);
-            using StringFormat format = CreateTextFormat();
-            graphics.Clear(Color.Transparent);
-            graphics.CompositingMode = CompositingMode.SourceOver;
-            graphics.CompositingQuality = CompositingQuality.HighQuality;
-            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
-            graphics.SmoothingMode = SmoothingMode.HighQuality;
-            graphics.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            graphics.DrawString(text, font, brush, new PointF(PaddingX, PaddingY), format);
+            graphics.Clear(Color.FromArgb(225, 0, 0, 0));
+            graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            Rectangle textBounds = new(PaddingX, 0, Math.Max(1, overlaySize.Width - PaddingX * 2), overlaySize.Height);
+            TextRenderer.DrawText(
+                graphics,
+                text,
+                font,
+                textBounds,
+                labelColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine);
 
             return bitmap;
         }
@@ -919,7 +971,7 @@ internal sealed class ThumbnailOverlay : Form
 
             _ = NativeMethods.SetWindowPos(
                 Handle,
-                NativeMethods.HWND_TOPMOST,
+                owner.Handle,
                 0,
                 0,
                 0,

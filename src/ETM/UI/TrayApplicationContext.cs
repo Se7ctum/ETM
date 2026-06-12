@@ -221,7 +221,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 ThumbnailOverlay overlay = overlays[handle];
                 if (NativeMethods.IsWindow(overlay.SourceHandle))
                 {
-                    overlay.EnsureAlwaysOnTop();
                     continue;
                 }
 
@@ -242,6 +241,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                     }
 
                     existingOverlay.ApplySettings(state, activeProfile.Appearance);
+                    existingOverlay.SetHotkeyGroups(GetHotkeyGroupMenuItems(eveWindow.CharacterName));
                     existingOverlay.SetLabelHotkey(GetLabelHotkey(eveWindow.CharacterName, state));
                     existingOverlay.Visible = overlaysVisible && (state?.Visible ?? true);
                     continue;
@@ -445,11 +445,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 AspectRatioLocked = state?.AspectRatioLocked ?? true
             };
             overlay.ThumbnailsLocked = thumbnailsLocked;
+            overlay.SetHotkeyGroups(GetHotkeyGroupMenuItems(eveWindow.CharacterName));
             overlay.SetLabelHotkey(GetLabelHotkey(eveWindow.CharacterName, state));
             overlay.OverlayStateChanged += OverlayStateChanged;
             overlay.SourceFocusRequested += OverlaySourceFocusRequested;
             overlay.ResizeAllRequested += OverlayResizeAllRequested;
             overlay.ResetSizeRequested += OverlayResetSizeRequested;
+            overlay.HotkeyGroupAssignmentChanged += OverlayHotkeyGroupAssignmentChanged;
             overlays.Add(eveWindow.Handle, overlay);
 
             if (overlay.Visible)
@@ -466,6 +468,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
                 overlay.ResizeAllRequested -= OverlayResizeAllRequested;
                 overlay.ResetSizeRequested -= OverlayResetSizeRequested;
+                overlay.HotkeyGroupAssignmentChanged -= OverlayHotkeyGroupAssignmentChanged;
                 overlay.Dispose();
             }
 
@@ -775,9 +778,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             OverlayState? state = FindOverlayState(overlay.CharacterName);
             overlay.ApplySettings(state, activeProfile.Appearance);
+            overlay.SetHotkeyGroups(GetHotkeyGroupMenuItems(overlay.CharacterName));
             overlay.SetLabelHotkey(GetLabelHotkey(overlay.CharacterName, state));
             overlay.Visible = overlaysVisible && (state?.Visible ?? true);
         }
+    }
+
+    private IReadOnlyList<ThumbnailOverlay.HotkeyGroupMenuItem> GetHotkeyGroupMenuItems(string characterName)
+    {
+        if (string.IsNullOrWhiteSpace(characterName))
+        {
+            return Array.Empty<ThumbnailOverlay.HotkeyGroupMenuItem>();
+        }
+
+        return activeProfile.HotkeyGroups
+            .Where(group => !string.IsNullOrWhiteSpace(group.Name))
+            .Select(group => new ThumbnailOverlay.HotkeyGroupMenuItem(
+                group.Name,
+                group.CycleHotkey,
+                group.CharacterNames.Any(candidate =>
+                    string.Equals(candidate, characterName, StringComparison.OrdinalIgnoreCase))))
+            .ToList();
     }
 
     private string GetLabelHotkey(string characterName, OverlayState? state)
@@ -787,12 +808,60 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return state.DirectHotkey;
         }
 
-        HotkeyGroup? group = activeProfile.HotkeyGroups.FirstOrDefault(group =>
-            !string.IsNullOrWhiteSpace(group.CycleHotkey)
-            && group.CharacterNames.Any(candidate =>
-                string.Equals(candidate, characterName, StringComparison.OrdinalIgnoreCase)));
+        if (string.IsNullOrWhiteSpace(characterName))
+        {
+            return string.Empty;
+        }
 
-        return group?.CycleHotkey ?? string.Empty;
+        List<string> groupHotkeys = activeProfile.HotkeyGroups
+            .Where(group => !string.IsNullOrWhiteSpace(group.CycleHotkey)
+                && group.CharacterNames.Any(candidate =>
+                    string.Equals(candidate, characterName, StringComparison.OrdinalIgnoreCase)))
+            .Select(group => group.CycleHotkey.Trim())
+            .Where(hotkey => !string.IsNullOrWhiteSpace(hotkey))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return string.Join(", ", groupHotkeys);
+    }
+
+    private void OverlayHotkeyGroupAssignmentChanged(object? sender, ThumbnailOverlay.HotkeyGroupAssignmentEventArgs e)
+    {
+        if (sender is not ThumbnailOverlay overlay
+            || string.IsNullOrWhiteSpace(overlay.CharacterName)
+            || string.IsNullOrWhiteSpace(e.GroupName))
+        {
+            return;
+        }
+
+        HotkeyGroup? group = activeProfile.HotkeyGroups.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, e.GroupName, StringComparison.OrdinalIgnoreCase));
+        if (group is null)
+        {
+            return;
+        }
+
+        group.CharacterNames.RemoveAll(candidate =>
+            string.IsNullOrWhiteSpace(candidate)
+            || string.Equals(candidate, overlay.CharacterName, StringComparison.OrdinalIgnoreCase));
+        if (e.Assigned)
+        {
+            group.CharacterNames.Add(overlay.CharacterName);
+        }
+
+        RegisterHotkeys();
+        RefreshOverlayHotkeyLabels();
+        SettingsManager.Save(settings);
+    }
+
+    private void RefreshOverlayHotkeyLabels()
+    {
+        foreach (ThumbnailOverlay overlay in overlays.Values)
+        {
+            OverlayState? state = FindOverlayState(overlay.CharacterName);
+            overlay.SetHotkeyGroups(GetHotkeyGroupMenuItems(overlay.CharacterName));
+            overlay.SetLabelHotkey(GetLabelHotkey(overlay.CharacterName, state));
+        }
     }
 
     private void ApplyThumbnailLockState()
@@ -951,6 +1020,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             overlay.SourceFocusRequested -= OverlaySourceFocusRequested;
             overlay.ResizeAllRequested -= OverlayResizeAllRequested;
             overlay.ResetSizeRequested -= OverlayResetSizeRequested;
+            overlay.HotkeyGroupAssignmentChanged -= OverlayHotkeyGroupAssignmentChanged;
             overlay.Dispose();
         }
 
