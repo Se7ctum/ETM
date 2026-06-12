@@ -939,7 +939,7 @@ internal sealed class ThumbnailOverlay : Form
             Color labelColor = ParseColor(appearance.LabelColor, Color.White);
             Bitmap bitmap = new(overlaySize.Width, overlaySize.Height, PixelFormat.Format32bppPArgb);
             using Graphics graphics = Graphics.FromImage(bitmap);
-            graphics.Clear(Color.FromArgb(225, 0, 0, 0));
+            graphics.Clear(Color.FromArgb(255, 0, 0, 0));
             DrawBorder(graphics, appearance, overlaySize);
             graphics.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
             Rectangle textBounds = new(PaddingX, 0, Math.Max(1, overlaySize.Width - PaddingX * 2), overlaySize.Height);
