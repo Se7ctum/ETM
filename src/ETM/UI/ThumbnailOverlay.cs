@@ -893,7 +893,7 @@ internal sealed class ThumbnailOverlay : Form
             this.owner = owner;
             FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
-            TopMost = false;
+            TopMost = true;
             StartPosition = FormStartPosition.Manual;
         }
 
@@ -971,7 +971,7 @@ internal sealed class ThumbnailOverlay : Form
 
             _ = NativeMethods.SetWindowPos(
                 Handle,
-                owner.Handle,
+                NativeMethods.HWND_TOPMOST,
                 0,
                 0,
                 0,
