@@ -887,7 +887,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         hotkeyManager.UnregisterAll();
         hotkeyManager.Register(
             string.IsNullOrWhiteSpace(settings.Global.ShowHideAllHotkey) ? "F12" : settings.Global.ShowHideAllHotkey,
-            ToggleAllOverlays);
+            () => RunHotkeyAction(ToggleAllOverlays));
 
         foreach (OverlayState state in activeProfile.Overlays)
         {
@@ -897,7 +897,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             string characterName = state.CharacterName;
-            hotkeyManager.Register(state.DirectHotkey, () => FocusOverlayForCharacter(characterName));
+            hotkeyManager.Register(state.DirectHotkey, () => RunHotkeyAction(() => FocusOverlayForCharacter(characterName)));
         }
 
         foreach (HotkeyGroup group in activeProfile.HotkeyGroups)
@@ -908,8 +908,24 @@ internal sealed class TrayApplicationContext : ApplicationContext
             }
 
             string groupName = group.Name;
-            hotkeyManager.Register(group.CycleHotkey, () => CycleHotkeyGroup(groupName));
+            hotkeyManager.Register(group.CycleHotkey, () => RunHotkeyAction(() => CycleHotkeyGroup(groupName)));
         }
+    }
+
+    private void RunHotkeyAction(Action action)
+    {
+        if (settings.Global.HotkeysRequireEveFocus && !IsEveClientForeground())
+        {
+            return;
+        }
+
+        action();
+    }
+
+    private bool IsEveClientForeground()
+    {
+        IntPtr foregroundHwnd = NativeMethods.GetForegroundWindow();
+        return overlays.Values.Any(overlay => overlay.SourceHandle == foregroundHwnd);
     }
 
     private void FocusOverlayForCharacter(string characterName)

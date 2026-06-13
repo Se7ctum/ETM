@@ -538,6 +538,7 @@ internal sealed class WpfConfigRoot : UserControl
                 MessageBox.Show($"Unable to update startup setting: {ex.Message}", "ETM", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }));
+        stack.Children.Add(Check("Hotkeys only while EVE is active", global.HotkeysRequireEveFocus, value => { global.HotkeysRequireEveFocus = value; MarkDirty(); }));
         stack.Children.Add(Check("Snap to edges", global.SnapToEdges, value => { global.SnapToEdges = value; MarkDirty(); }));
         stack.Children.Add(NumberRow("Snap threshold", global.SnapThreshold, 0, 64, value => global.SnapThreshold = value));
         stack.Children.Add(Check("Snap to grid", global.SnapToGrid, value => { global.SnapToGrid = value; MarkDirty(); }));
