@@ -12,7 +12,7 @@ internal sealed class GlobalSettings
 {
     public string ShowHideAllHotkey { get; set; } = string.Empty;
     public bool LaunchOnStartup { get; set; }
-    public bool HotkeysRequireEveFocus { get; set; }
+    public bool HotkeysRequireEveFocus { get; set; } = true;
     public bool SnapToEdges { get; set; } = true;
     public int SnapThreshold { get; set; } = 12;
     public bool SnapToGrid { get; set; } = true;

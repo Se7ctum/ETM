@@ -851,9 +851,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
             return;
         }
 
-        group.CharacterNames.RemoveAll(candidate =>
-            string.IsNullOrWhiteSpace(candidate)
-            || string.Equals(candidate, overlay.CharacterName, StringComparison.OrdinalIgnoreCase));
+        foreach (HotkeyGroup candidateGroup in activeProfile.HotkeyGroups)
+        {
+            candidateGroup.CharacterNames.RemoveAll(candidate =>
+                string.IsNullOrWhiteSpace(candidate)
+                || string.Equals(candidate, overlay.CharacterName, StringComparison.OrdinalIgnoreCase));
+        }
+
         if (e.Assigned)
         {
             group.CharacterNames.Add(overlay.CharacterName);
