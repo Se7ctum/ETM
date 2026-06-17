@@ -29,6 +29,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private ToolStripMenuItem showHideAllMenuItem = null!;
     private bool thumbnailsLocked;
     private bool overlaysVisible = true;
+    private bool hotkeysRegistered;
     private bool isShuttingDown;
     private bool isSwitchingProfile;
 
@@ -272,6 +273,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         }
 
         activeOverlay?.EnsureAlwaysOnTop();
+        UpdateHotkeyRegistrationState();
     }
 
     private void SetActiveOverlayImmediately(ThumbnailOverlay activeOverlay)
@@ -889,6 +891,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private void RegisterHotkeys()
     {
         hotkeyManager.UnregisterAll();
+        hotkeysRegistered = false;
+        if (settings.Global.HotkeysRequireEveFocus && !IsEveClientForeground())
+        {
+            return;
+        }
+
         hotkeyManager.Register(
             string.IsNullOrWhiteSpace(settings.Global.ShowHideAllHotkey) ? "F12" : settings.Global.ShowHideAllHotkey,
             () => RunHotkeyAction(ToggleAllOverlays));
@@ -913,6 +921,27 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
             string groupName = group.Name;
             hotkeyManager.Register(group.CycleHotkey, () => RunHotkeyAction(() => CycleHotkeyGroup(groupName)));
+        }
+
+        hotkeysRegistered = true;
+    }
+
+    private void UpdateHotkeyRegistrationState()
+    {
+        if (!settings.Global.HotkeysRequireEveFocus)
+        {
+            if (!hotkeysRegistered)
+            {
+                RegisterHotkeys();
+            }
+
+            return;
+        }
+
+        bool shouldRegister = IsEveClientForeground();
+        if (shouldRegister != hotkeysRegistered)
+        {
+            RegisterHotkeys();
         }
     }
 
